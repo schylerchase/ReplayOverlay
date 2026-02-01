@@ -1,0 +1,60 @@
+# Config (contains passwords/keys)
+config.json
+
+# Build outputs
+build/
+dist/
+*.spec
+installer_output/
+
+# C# build artifacts
+bin/
+obj/
+*.nupkg
+*.snupkg
+
+# C++ build artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.ilk
+*.pdb
+*.obj
+*.lib
+*.exp
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+.vs/
+*.suo
+*.user
+*.sln.docstates
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Python (legacy)
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Logs and temp
+*.log
+*.tmp
+
+# Temporary/scratch directories
+tmp_reflect/

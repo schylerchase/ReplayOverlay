@@ -1,0 +1,64 @@
+using System.Runtime.InteropServices;
+
+namespace OBSReplay.Host;
+
+internal static partial class NativeMethods
+{
+    // --- User32: Window and hotkey functions ---
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetForegroundWindow();
+
+    [LibraryImport("user32.dll")]
+    internal static partial uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    // Hotkey modifier flags
+    internal const uint MOD_ALT = 0x0001;
+    internal const uint MOD_CONTROL = 0x0002;
+    internal const uint MOD_SHIFT = 0x0004;
+    internal const uint MOD_WIN = 0x0008;
+    internal const uint MOD_NOREPEAT = 0x4000;
+
+    internal const int WM_HOTKEY = 0x0312;
+
+    // --- Kernel32: Process functions ---
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    internal static partial IntPtr OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool CloseHandle(IntPtr hObject);
+
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool QueryFullProcessImageNameW(
+        IntPtr hProcess, uint dwFlags, char[] lpExeName, ref uint lpdwSize);
+
+    internal const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+    // --- Shell32: Admin and elevation ---
+
+    [LibraryImport("shell32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool IsUserAnAdmin();
+
+    [LibraryImport("shell32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    internal static partial int ShellExecuteW(
+        IntPtr hwnd,
+        string lpOperation,
+        string lpFile,
+        string? lpParameters,
+        string? lpDirectory,
+        int nShowCmd);
+
+    internal const int SW_SHOWNORMAL = 1;
+}
