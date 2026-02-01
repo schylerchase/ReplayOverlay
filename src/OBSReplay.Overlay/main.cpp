@@ -8,7 +8,9 @@ static void CrashLog(const char* msg)
     char path[MAX_PATH];
     if (GetEnvironmentVariableA("LOCALAPPDATA", path, MAX_PATH) > 0)
     {
-        std::string logPath = std::string(path) + "\\ReplayOverlay\\overlay_crash.log";
+        std::string dirPath = std::string(path) + "\\ReplayOverlay";
+        CreateDirectoryA(dirPath.c_str(), nullptr); // Ensure directory exists (no-op if already present)
+        std::string logPath = dirPath + "\\overlay_crash.log";
         std::ofstream f(logPath, std::ios::app);
         if (f.is_open())
         {

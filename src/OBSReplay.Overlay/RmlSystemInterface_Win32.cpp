@@ -61,9 +61,17 @@ void RmlSystemInterface_Win32::SetClipboardText(const Rml::String& text)
     HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
     if (hg)
     {
-        memcpy(GlobalLock(hg), text.c_str(), text.size() + 1);
+        void* locked = GlobalLock(hg);
+        if (!locked)
+        {
+            GlobalFree(hg);
+            CloseClipboard();
+            return;
+        }
+        memcpy(locked, text.c_str(), text.size() + 1);
         GlobalUnlock(hg);
-        SetClipboardData(CF_TEXT, hg);
+        if (!SetClipboardData(CF_TEXT, hg))
+            GlobalFree(hg); // Ownership not transferred on failure
     }
     CloseClipboard();
 }

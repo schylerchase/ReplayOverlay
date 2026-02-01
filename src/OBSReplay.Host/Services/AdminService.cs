@@ -12,7 +12,11 @@ public static class AdminService
     public static bool IsAdmin()
     {
         try { return NativeMethods.IsUserAnAdmin(); }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"IsAdmin check failed: {ex.Message}");
+            return false;
+        }
     }
 
     public static bool RequestElevation()
@@ -78,7 +82,11 @@ public static class AdminService
             using var key = Registry.CurrentUser.OpenSubKey(RegistryKey);
             return key?.GetValue(AppName) != null;
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"GetWindowsStartup registry read failed: {ex.Message}");
+            return false;
+        }
     }
 
     public static bool IsValidObsExecutable(string path)

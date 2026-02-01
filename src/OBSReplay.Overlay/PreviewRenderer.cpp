@@ -1,5 +1,7 @@
 #include "PreviewRenderer.h"
 #include "DxRenderer.h"
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
 #include <vector>
 #include <string>
 
@@ -40,7 +42,11 @@ void PreviewRenderer::UpdateFromBase64(DxRenderer& dx, const std::string& base64
 
     // Decode base64 to PNG bytes
     auto pngData = Base64Decode(base64Data);
-    if (pngData.empty()) return;
+    if (pngData.empty())
+    {
+        OutputDebugStringA("[PreviewRenderer] Base64 decode returned empty result\n");
+        return;
+    }
 
     // Decode PNG to RGBA pixels
     int w = 0, h = 0, channels = 0;
@@ -48,13 +54,19 @@ void PreviewRenderer::UpdateFromBase64(DxRenderer& dx, const std::string& base64
         pngData.data(), static_cast<int>(pngData.size()),
         &w, &h, &channels, 4); // Force RGBA
 
-    if (!pixels) return;
+    if (!pixels)
+    {
+        OutputDebugStringA("[PreviewRenderer] stbi_load_from_memory failed\n");
+        return;
+    }
 
     // Release old texture
     Release();
 
     // Create D3D11 texture
     m_srv = dx.CreateTextureFromRGBA(pixels, w, h);
+    if (!m_srv)
+        OutputDebugStringA("[PreviewRenderer] CreateTextureFromRGBA returned nullptr\n");
     m_width  = w;
     m_height = h;
 

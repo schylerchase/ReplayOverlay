@@ -107,7 +107,22 @@ public class IpcServerService : IDisposable
         if (bytesRead < length) return null;
 
         var json = Encoding.UTF8.GetString(bodyBuf);
-        return JsonSerializer.Deserialize<IpcMessage>(json);
+
+        try
+        {
+            var msg = JsonSerializer.Deserialize<IpcMessage>(json);
+            if (msg == null || string.IsNullOrEmpty(msg.Type))
+            {
+                Debug.WriteLine("IPC: Received message with null/empty type, discarding.");
+                return null;
+            }
+            return msg;
+        }
+        catch (JsonException ex)
+        {
+            Debug.WriteLine($"IPC: Failed to deserialize message: {ex.Message}");
+            return null;
+        }
     }
 
     private static int ReadExact(Stream stream, byte[] buffer, int count)
@@ -220,7 +235,8 @@ public class IpcServerService : IDisposable
     public void Dispose()
     {
         _cts?.Cancel();
-        try { _pipe?.Dispose(); } catch { /* ignore */ }
+        try { _pipe?.Dispose(); }
+        catch (Exception ex) { Debug.WriteLine($"IPC pipe dispose error: {ex.Message}"); }
         _cts?.Dispose();
         GC.SuppressFinalize(this);
     }

@@ -30,15 +30,16 @@ public class ObsWebSocketService : IDisposable
                     LastSuccessfulCall = DateTime.UtcNow;
                     return true;
                 }
-                catch
+                catch (Exception ex)
                 {
                     // Connection is stale, disconnect and retry below
-                    Debug.WriteLine("OBS connection stale, reconnecting...");
+                    Debug.WriteLine($"OBS connection stale, reconnecting... ({ex.Message})");
                 }
             }
 
             // Disconnect any stale connection before reconnecting
-            try { _obs.Disconnect(); } catch { }
+            try { _obs.Disconnect(); }
+            catch (Exception ex) { Debug.WriteLine($"OBS pre-reconnect disconnect failed: {ex.Message}"); }
             Thread.Sleep(300);
 
             var url = $"ws://127.0.0.1:{port}";
@@ -64,7 +65,7 @@ public class ObsWebSocketService : IDisposable
     public void Disconnect()
     {
         try { _obs.Disconnect(); }
-        catch { /* ignore */ }
+        catch (Exception ex) { Debug.WriteLine($"OBS disconnect error: {ex.Message}"); }
     }
 
     // --- Scenes ---
@@ -123,9 +124,9 @@ public class ObsWebSocketService : IDisposable
                     _obs.GetInputVolume(input.InputName);
                     audioNames.Add(input.InputName);
                 }
-                catch
+                catch (Exception)
                 {
-                    // Not an audio input
+                    // Expected: non-audio inputs don't support GetInputVolume
                 }
             }
             return audioNames;
@@ -150,8 +151,9 @@ public class ObsWebSocketService : IDisposable
                         IsMuted = muted
                     });
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Debug.WriteLine($"GetAudioLevels failed for '{name}': {ex.Message}");
                     result.Add(new Models.AudioSource
                     {
                         Name = name,
@@ -279,13 +281,13 @@ public class ObsWebSocketService : IDisposable
                         var offsetNs = _obs.GetInputAudioSyncOffset(name);
                         info.SyncOffsetMs = (int)(offsetNs / 1_000_000);
                     }
-                    catch { /* leave default 0 */ }
+                    catch (Exception ex) { Debug.WriteLine($"GetAudioSyncOffset failed for '{name}': {ex.Message}"); }
 
                     try
                     {
                         info.Balance = _obs.GetInputAudioBalance(name);
                     }
-                    catch { /* leave default 0.5 */ }
+                    catch (Exception ex) { Debug.WriteLine($"GetAudioBalance failed for '{name}': {ex.Message}"); }
 
                     try
                     {
@@ -297,7 +299,7 @@ public class ObsWebSocketService : IDisposable
                             _ => 0 // OBS_MONITORING_TYPE_NONE
                         };
                     }
-                    catch { /* leave default 0 */ }
+                    catch (Exception ex) { Debug.WriteLine($"GetAudioMonitorType failed for '{name}': {ex.Message}"); }
 
                     try
                     {
@@ -309,11 +311,11 @@ public class ObsWebSocketService : IDisposable
                         info.Tracks[4] = tracks.IsTrack5Active;
                         info.Tracks[5] = tracks.IsTrack6Active;
                     }
-                    catch { /* leave default all-false */ }
+                    catch (Exception ex) { Debug.WriteLine($"GetAudioTracks failed for '{name}': {ex.Message}"); }
 
                     result.Add(info);
                 }
-                catch { /* skip this source entirely */ }
+                catch (Exception ex) { Debug.WriteLine($"GetAudioAdvancedInfo skipped source '{name}': {ex.Message}"); }
             }
             return result;
         }, []);
@@ -580,7 +582,7 @@ public class ObsWebSocketService : IDisposable
                                 SourceKind = item.SourceKind ?? ""
                             };
                             try { si.IsLocked = _obs.GetSceneItemLocked(state.CurrentScene, item.ItemId); }
-                            catch { /* leave default false */ }
+                            catch (Exception ex) { Debug.WriteLine($"FetchState: GetSceneItemLocked failed for item {item.ItemId}: {ex.Message}"); }
                             return si;
                         }).ToList();
                     }
@@ -605,7 +607,10 @@ public class ObsWebSocketService : IDisposable
                                 _obs.GetInputVolume(input.InputName);
                                 audioNames.Add(input.InputName);
                             }
-                            catch { }
+                            catch (Exception)
+                            {
+                                // Expected: non-audio inputs don't support GetInputVolume
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -628,8 +633,9 @@ public class ObsWebSocketService : IDisposable
                             IsMuted = muted
                         });
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        Debug.WriteLine($"FetchState: Audio level fetch failed for '{name}': {ex.Message}");
                         state.Audio.Add(new Models.AudioSource
                         {
                             Name = name,
@@ -641,7 +647,7 @@ public class ObsWebSocketService : IDisposable
 
                 // Status - each wrapped individually so one failure doesn't kill the rest
                 try { state.IsStreaming = _obs.GetStreamStatus().IsActive; }
-                catch { /* leave default false */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetStreamStatus failed: {ex.Message}"); }
 
                 try
                 {
@@ -649,10 +655,10 @@ public class ObsWebSocketService : IDisposable
                     state.IsRecording = recStatus.IsRecording;
                     state.IsRecordingPaused = recStatus.IsRecordingPaused;
                 }
-                catch { /* leave default false */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetRecordStatus failed: {ex.Message}"); }
 
                 try { state.IsBufferActive = _obs.GetReplayBufferStatus(); }
-                catch { /* leave default false */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetReplayBufferStatus failed: {ex.Message}"); }
 
                 // Transitions
                 try
@@ -662,23 +668,23 @@ public class ObsWebSocketService : IDisposable
                         .Select(t => t.Name).ToList();
                     state.CurrentTransition = transInfo.CurrentTransition;
                 }
-                catch { /* leave defaults */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetSceneTransitionList failed: {ex.Message}"); }
 
                 try
                 {
                     var currentTrans = _obs.GetCurrentSceneTransition();
                     state.TransitionDuration = currentTrans.Duration ?? 0;
                 }
-                catch { /* leave default 0 */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetCurrentSceneTransition failed: {ex.Message}"); }
 
                 // Studio mode
                 try { state.StudioModeEnabled = _obs.GetStudioModeEnabled(); }
-                catch { /* leave default false */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetStudioModeEnabled failed: {ex.Message}"); }
 
                 if (state.StudioModeEnabled)
                 {
                     try { state.PreviewScene = _obs.GetCurrentPreviewScene(); }
-                    catch { /* leave null */ }
+                    catch (Exception ex) { Debug.WriteLine($"FetchState: GetCurrentPreviewScene failed: {ex.Message}"); }
                 }
 
                 // Profiles & collections
@@ -688,14 +694,14 @@ public class ObsWebSocketService : IDisposable
                     state.CurrentProfile = profiles.CurrentProfileName;
                     state.Profiles = profiles.Profiles.ToList();
                 }
-                catch { /* leave defaults */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetProfileList failed: {ex.Message}"); }
 
                 try
                 {
                     state.CurrentSceneCollection = _obs.GetCurrentSceneCollection();
                     state.SceneCollections = _obs.GetSceneCollectionList();
                 }
-                catch { /* leave defaults */ }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetSceneCollectionList failed: {ex.Message}"); }
 
                 // Capture check (only when buffer active)
                 if (state.IsBufferActive && !string.IsNullOrEmpty(state.CurrentScene))
@@ -718,7 +724,7 @@ public class ObsWebSocketService : IDisposable
                         }
                         state.HasActiveCapture ??= false;
                     }
-                    catch { /* leave null */ }
+                    catch (Exception ex) { Debug.WriteLine($"FetchState: Capture check failed: {ex.Message}"); }
                 }
             }
 

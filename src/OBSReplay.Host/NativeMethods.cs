@@ -61,4 +61,39 @@ internal static partial class NativeMethods
         int nShowCmd);
 
     internal const int SW_SHOWNORMAL = 1;
+
+    // --- Crypt32: DPAPI data protection ---
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct DATA_BLOB
+    {
+        public int cbData;
+        public IntPtr pbData;
+    }
+
+    [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptProtectData(
+        ref DATA_BLOB pDataIn,
+        string? szDataDescr,
+        IntPtr pOptionalEntropy,
+        IntPtr pvReserved,
+        IntPtr pPromptStruct,
+        uint dwFlags,
+        out DATA_BLOB pDataOut);
+
+    [DllImport("crypt32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool CryptUnprotectData(
+        ref DATA_BLOB pDataIn,
+        IntPtr ppszDataDescr,
+        IntPtr pOptionalEntropy,
+        IntPtr pvReserved,
+        IntPtr pPromptStruct,
+        uint dwFlags,
+        out DATA_BLOB pDataOut);
+
+    // CRYPTPROTECT_LOCAL_MACHINE = 0x04 (machine scope)
+    // 0x00 = current user scope (what we want)
+    internal const uint CRYPTPROTECT_UI_FORBIDDEN = 0x01;
 }

@@ -138,9 +138,12 @@ bool OverlayApp::Tick()
             {
                 auto box = panel->GetAbsoluteOffset(Rml::BoxArea::Border);
                 auto size = panel->GetBox().GetSize(Rml::BoxArea::Border);
-                m_window.SetPanelRect(
-                    static_cast<int>(box.x), static_cast<int>(box.y),
-                    static_cast<int>(size.x), static_cast<int>(size.y));
+                if (size.x > 0 && size.y > 0)
+                {
+                    m_window.SetPanelRect(
+                        static_cast<int>(box.x), static_cast<int>(box.y),
+                        static_cast<int>(size.x), static_cast<int>(size.y));
+                }
             }
         }
     }

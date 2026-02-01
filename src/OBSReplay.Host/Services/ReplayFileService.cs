@@ -13,8 +13,14 @@ public class ReplayFileService : IDisposable
     /// <summary>
     /// Set by GameDetectionService before a replay save. The next created video file
     /// will be moved into a subfolder with this name.
+    /// Accessed from multiple threads; use Interlocked.Exchange for atomic read-and-clear.
     /// </summary>
-    public string? PendingGame { get; set; }
+    private volatile string? _pendingGame;
+    public string? PendingGame
+    {
+        get => _pendingGame;
+        set => _pendingGame = value;
+    }
 
     public void Start(string watchFolder)
     {
@@ -75,9 +81,9 @@ public class ReplayFileService : IDisposable
                 lock (_lock) { _recentFiles.Remove(e.FullPath); }
             });
 
-            // Organize into game subfolder
-            var gameName = PendingGame;
-            PendingGame = null;
+            // Organize into game subfolder (atomic read-and-clear to prevent two
+            // FileCreated events from both reading the same pending game)
+            var gameName = Interlocked.Exchange(ref _pendingGame, null);
 
             if (!string.IsNullOrEmpty(gameName))
             {
@@ -157,9 +163,10 @@ public class ReplayFileService : IDisposable
 
                 lastSize = currentSize;
             }
-            catch
+            catch (Exception ex)
             {
                 // File may be locked; keep waiting
+                Debug.WriteLine($"WaitForFileComplete: File access error (retrying): {ex.Message}");
             }
 
             Thread.Sleep(TimeSpan.FromSeconds(Constants.FilePollIntervalS));

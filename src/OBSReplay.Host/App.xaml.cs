@@ -34,11 +34,11 @@ public partial class App : System.Windows.Application
     private bool _lastBufferStatus;
     private bool _overlayVisible;
 
-    // Save guard
-    private volatile bool _saveInProgress;
+    // Save guard (0 = idle, 1 = in progress; atomically swapped via Interlocked)
+    private int _saveInProgress;
 
-    // Reconnection tracking
-    private volatile bool _connecting;
+    // Reconnection tracking (0 = idle, 1 = connecting; atomically swapped via Interlocked)
+    private int _connecting;
     private DateTime _lastReconnectAttempt = DateTime.MinValue;
     private const double ReconnectIntervalS = 10.0;
 
@@ -93,7 +93,9 @@ public partial class App : System.Windows.Application
         _replayFiles.Start(_config.WatchFolder);
 
         // --- OBS connection (background) ---
-        Task.Run(ConnectToObs);
+        Task.Run(ConnectToObs).ContinueWith(
+            t => Debug.WriteLine($"ConnectToObs faulted: {t.Exception?.GetBaseException().Message}"),
+            TaskContinuationOptions.OnlyOnFaulted);
 
         // --- Status polling timer (1 Hz) ---
         _statusTimer = new DispatcherTimer
@@ -208,20 +210,30 @@ public partial class App : System.Windows.Application
                     var name = p.ProcessName.ToLowerInvariant();
                     return name is "obs64" or "obs32";
                 }
-                catch { return false; }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"IsObsRunning: Process query failed: {ex.Message}");
+                    return false;
+                }
             });
         }
-        catch { return false; }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"IsObsRunning failed: {ex.Message}");
+            return false;
+        }
     }
 
     // --- Polling ---
 
-    private volatile bool _polling;
+    // Polling guard (0 = idle, 1 = polling; atomically swapped via Interlocked)
+    private int _polling;
 
     private void OnStatusTick(object? sender, EventArgs e)
     {
-        // Don't stack polling calls
-        if (_polling || _connecting) return;
+        // Don't stack polling calls (atomic check: skip if already polling or connecting)
+        if (Interlocked.CompareExchange(ref _polling, 0, 0) != 0) return;
+        if (Interlocked.CompareExchange(ref _connecting, 0, 0) != 0) return;
 
         if (!_obs.IsConnected)
         {
@@ -229,7 +241,8 @@ public partial class App : System.Windows.Application
             if ((DateTime.UtcNow - _lastReconnectAttempt).TotalSeconds >= ReconnectIntervalS)
             {
                 _lastReconnectAttempt = DateTime.UtcNow;
-                _connecting = true;
+                // Atomically claim the connecting slot; bail if another thread got it first
+                if (Interlocked.CompareExchange(ref _connecting, 1, 0) != 0) return;
                 Task.Run(() =>
                 {
                     try
@@ -250,14 +263,15 @@ public partial class App : System.Windows.Application
                     }
                     finally
                     {
-                        _connecting = false;
+                        Interlocked.Exchange(ref _connecting, 0);
                     }
                 });
             }
             return;
         }
 
-        _polling = true;
+        // Atomically claim the polling slot; bail if another tick got it first
+        if (Interlocked.CompareExchange(ref _polling, 1, 0) != 0) return;
 
         Task.Run(() =>
         {
@@ -307,7 +321,7 @@ public partial class App : System.Windows.Application
             }
             finally
             {
-                _polling = false;
+                Interlocked.Exchange(ref _polling, 0);
             }
         });
     }
@@ -319,9 +333,16 @@ public partial class App : System.Windows.Application
 
         Task.Run(() =>
         {
-            var base64 = _obs.GetScreenshotBase64(Constants.PreviewWidth, Constants.PreviewHeight);
-            if (base64 != null)
-                _ipc.SendPreviewFrame(base64);
+            try
+            {
+                var base64 = _obs.GetScreenshotBase64(Constants.PreviewWidth, Constants.PreviewHeight);
+                if (base64 != null)
+                    _ipc.SendPreviewFrame(base64);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Preview tick error: {ex.Message}");
+            }
         });
     }
 
@@ -360,31 +381,42 @@ public partial class App : System.Windows.Application
                 break;
 
             case "switch_scene":
-                var sceneData = JsonDocument.Parse(msg.Payload);
-                var sceneName = sceneData.RootElement.GetProperty("name").GetString();
-                if (sceneName != null)
+                if (TryParsePayload(msg, out var sceneRoot)
+                    && TryGetString(sceneRoot, "name", out var sceneName))
+                {
                     Task.Run(() => _obs.SetScene(sceneName));
+                }
                 break;
 
             case "toggle_source":
-                var srcData = JsonDocument.Parse(msg.Payload);
-                var srcScene = srcData.RootElement.GetProperty("scene").GetString() ?? "";
-                var srcId = srcData.RootElement.GetProperty("itemId").GetInt32();
-                var srcVisible = srcData.RootElement.GetProperty("visible").GetBoolean();
-                Task.Run(() => _obs.SetSourceVisible(srcScene, srcId, srcVisible));
+                if (TryParsePayload(msg, out var srcRoot)
+                    && TryGetString(srcRoot, "scene", out var srcScene)
+                    && TryGetInt(srcRoot, "itemId", out var srcId)
+                    && TryGetBool(srcRoot, "visible", out var srcVisible))
+                {
+                    if (srcId >= 0)
+                        Task.Run(() => _obs.SetSourceVisible(srcScene, srcId, srcVisible));
+                }
                 break;
 
             case "set_volume":
-                var volData = JsonDocument.Parse(msg.Payload);
-                var volName = volData.RootElement.GetProperty("name").GetString() ?? "";
-                var volMul = volData.RootElement.GetProperty("volumeMul").GetDouble();
-                Task.Run(() => _obs.SetInputVolume(volName, volMul));
+                if (TryParsePayload(msg, out var volRoot)
+                    && TryGetString(volRoot, "name", out var volName)
+                    && TryGetDouble(volRoot, "volumeMul", out var volMul))
+                {
+                    volMul = Math.Clamp(volMul, 0.0, 1.0);
+                    if (volName.Length > 0)
+                        Task.Run(() => _obs.SetInputVolume(volName, volMul));
+                }
                 break;
 
             case "toggle_mute":
-                var muteData = JsonDocument.Parse(msg.Payload);
-                var muteName = muteData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => _obs.ToggleMute(muteName));
+                if (TryParsePayload(msg, out var muteRoot)
+                    && TryGetString(muteRoot, "name", out var muteName)
+                    && muteName.Length > 0)
+                {
+                    Task.Run(() => _obs.ToggleMute(muteName));
+                }
                 break;
 
             case "toggle_stream":
@@ -411,17 +443,21 @@ public partial class App : System.Windows.Application
                 break;
 
             case "set_profile":
-                var profileData = JsonDocument.Parse(msg.Payload);
-                var profileName = profileData.RootElement.GetProperty("name").GetString();
-                if (profileName != null)
+                if (TryParsePayload(msg, out var profileRoot)
+                    && TryGetString(profileRoot, "name", out var profileName)
+                    && profileName.Length > 0)
+                {
                     Task.Run(() => _obs.SetCurrentProfile(profileName));
+                }
                 break;
 
             case "set_scene_collection":
-                var collData = JsonDocument.Parse(msg.Payload);
-                var collName = collData.RootElement.GetProperty("name").GetString();
-                if (collName != null)
+                if (TryParsePayload(msg, out var collRoot)
+                    && TryGetString(collRoot, "name", out var collName)
+                    && collName.Length > 0)
+                {
                     Task.Run(() => _obs.SetCurrentSceneCollection(collName));
+                }
                 break;
 
             case "get_audio_advanced":
@@ -434,34 +470,52 @@ public partial class App : System.Windows.Application
                 break;
 
             case "set_audio_sync_offset":
-                var syncData = JsonDocument.Parse(msg.Payload);
-                var syncName = syncData.RootElement.GetProperty("name").GetString() ?? "";
-                var syncMs = syncData.RootElement.GetProperty("offsetMs").GetInt32();
-                Task.Run(() => _obs.SetInputAudioSyncOffset(syncName, syncMs));
+                if (TryParsePayload(msg, out var syncRoot)
+                    && TryGetString(syncRoot, "name", out var syncName)
+                    && TryGetInt(syncRoot, "offsetMs", out var syncMs)
+                    && syncName.Length > 0)
+                {
+                    Task.Run(() => _obs.SetInputAudioSyncOffset(syncName, syncMs));
+                }
                 break;
 
             case "set_audio_balance":
-                var balData = JsonDocument.Parse(msg.Payload);
-                var balName = balData.RootElement.GetProperty("name").GetString() ?? "";
-                var balVal = balData.RootElement.GetProperty("balance").GetDouble();
-                Task.Run(() => _obs.SetInputAudioBalance(balName, balVal));
+                if (TryParsePayload(msg, out var balRoot)
+                    && TryGetString(balRoot, "name", out var balName)
+                    && TryGetDouble(balRoot, "balance", out var balVal)
+                    && balName.Length > 0)
+                {
+                    balVal = Math.Clamp(balVal, 0.0, 1.0);
+                    Task.Run(() => _obs.SetInputAudioBalance(balName, balVal));
+                }
                 break;
 
             case "set_audio_monitor_type":
-                var monData = JsonDocument.Parse(msg.Payload);
-                var monName = monData.RootElement.GetProperty("name").GetString() ?? "";
-                var monType = monData.RootElement.GetProperty("monitorType").GetInt32();
-                Task.Run(() => _obs.SetInputAudioMonitorType(monName, monType));
+                if (TryParsePayload(msg, out var monRoot)
+                    && TryGetString(monRoot, "name", out var monName)
+                    && TryGetInt(monRoot, "monitorType", out var monType)
+                    && monName.Length > 0)
+                {
+                    monType = Math.Clamp(monType, 0, 2);
+                    Task.Run(() => _obs.SetInputAudioMonitorType(monName, monType));
+                }
                 break;
 
             case "set_audio_tracks":
-                var trkData = JsonDocument.Parse(msg.Payload);
-                var trkName = trkData.RootElement.GetProperty("name").GetString() ?? "";
-                var trkArr = trkData.RootElement.GetProperty("tracks");
-                var tracks = new bool[6];
-                for (int i = 0; i < 6 && i < trkArr.GetArrayLength(); i++)
-                    tracks[i] = trkArr[i].GetBoolean();
-                Task.Run(() => _obs.SetInputAudioTracks(trkName, tracks));
+                if (TryParsePayload(msg, out var trkRoot)
+                    && TryGetString(trkRoot, "name", out var trkName)
+                    && trkName.Length > 0
+                    && trkRoot.TryGetProperty("tracks", out var trkArr)
+                    && trkArr.ValueKind == JsonValueKind.Array)
+                {
+                    var tracks = new bool[6];
+                    for (int i = 0; i < 6 && i < trkArr.GetArrayLength(); i++)
+                    {
+                        if (trkArr[i].ValueKind == JsonValueKind.True || trkArr[i].ValueKind == JsonValueKind.False)
+                            tracks[i] = trkArr[i].GetBoolean();
+                    }
+                    Task.Run(() => _obs.SetInputAudioTracks(trkName, tracks));
+                }
                 break;
 
             // --- Source Management (Phase 3) ---
@@ -474,75 +528,105 @@ public partial class App : System.Windows.Application
                 break;
 
             case "create_source":
-                var csData = JsonDocument.Parse(msg.Payload);
-                var csScene = csData.RootElement.GetProperty("scene").GetString() ?? "";
-                var csName = csData.RootElement.GetProperty("name").GetString() ?? "";
-                var csKind = csData.RootElement.GetProperty("kind").GetString() ?? "";
-                Task.Run(() => { _obs.CreateInput(csScene, csName, csKind); _scenesCache = null; });
+                if (TryParsePayload(msg, out var csRoot)
+                    && TryGetString(csRoot, "scene", out var csScene)
+                    && TryGetString(csRoot, "name", out var csName)
+                    && TryGetString(csRoot, "kind", out var csKind)
+                    && csScene.Length > 0 && csName.Length > 0 && csKind.Length > 0)
+                {
+                    Task.Run(() => { _obs.CreateInput(csScene, csName, csKind); _scenesCache = null; });
+                }
                 break;
 
             case "remove_source":
-                var rsData = JsonDocument.Parse(msg.Payload);
-                var rsScene = rsData.RootElement.GetProperty("scene").GetString() ?? "";
-                var rsId = rsData.RootElement.GetProperty("itemId").GetInt32();
-                Task.Run(() => _obs.RemoveSceneItem(rsScene, rsId));
+                if (TryParsePayload(msg, out var rsRoot)
+                    && TryGetString(rsRoot, "scene", out var rsScene)
+                    && TryGetInt(rsRoot, "itemId", out var rsId)
+                    && rsScene.Length > 0 && rsId >= 0)
+                {
+                    Task.Run(() => _obs.RemoveSceneItem(rsScene, rsId));
+                }
                 break;
 
             case "duplicate_source":
-                var dsData = JsonDocument.Parse(msg.Payload);
-                var dsScene = dsData.RootElement.GetProperty("scene").GetString() ?? "";
-                var dsId = dsData.RootElement.GetProperty("itemId").GetInt32();
-                Task.Run(() => _obs.DuplicateSceneItem(dsScene, dsId));
+                if (TryParsePayload(msg, out var dsRoot)
+                    && TryGetString(dsRoot, "scene", out var dsScene)
+                    && TryGetInt(dsRoot, "itemId", out var dsId)
+                    && dsScene.Length > 0 && dsId >= 0)
+                {
+                    Task.Run(() => _obs.DuplicateSceneItem(dsScene, dsId));
+                }
                 break;
 
             case "reorder_source":
-                var roData = JsonDocument.Parse(msg.Payload);
-                var roScene = roData.RootElement.GetProperty("scene").GetString() ?? "";
-                var roId = roData.RootElement.GetProperty("itemId").GetInt32();
-                var roIdx = roData.RootElement.GetProperty("index").GetInt32();
-                Task.Run(() => _obs.SetSceneItemIndex(roScene, roId, roIdx));
+                if (TryParsePayload(msg, out var roRoot)
+                    && TryGetString(roRoot, "scene", out var roScene)
+                    && TryGetInt(roRoot, "itemId", out var roId)
+                    && TryGetInt(roRoot, "index", out var roIdx)
+                    && roScene.Length > 0 && roId >= 0 && roIdx >= 0)
+                {
+                    Task.Run(() => _obs.SetSceneItemIndex(roScene, roId, roIdx));
+                }
                 break;
 
             case "set_source_locked":
-                var slData = JsonDocument.Parse(msg.Payload);
-                var slScene = slData.RootElement.GetProperty("scene").GetString() ?? "";
-                var slId = slData.RootElement.GetProperty("itemId").GetInt32();
-                var slLocked = slData.RootElement.GetProperty("locked").GetBoolean();
-                Task.Run(() => _obs.SetSceneItemLocked(slScene, slId, slLocked));
+                if (TryParsePayload(msg, out var slRoot)
+                    && TryGetString(slRoot, "scene", out var slScene)
+                    && TryGetInt(slRoot, "itemId", out var slId)
+                    && TryGetBool(slRoot, "locked", out var slLocked)
+                    && slScene.Length > 0 && slId >= 0)
+                {
+                    Task.Run(() => _obs.SetSceneItemLocked(slScene, slId, slLocked));
+                }
                 break;
 
             case "rename_source":
-                var rnData = JsonDocument.Parse(msg.Payload);
-                var rnName = rnData.RootElement.GetProperty("name").GetString() ?? "";
-                var rnNew = rnData.RootElement.GetProperty("newName").GetString() ?? "";
-                Task.Run(() => _obs.SetInputName(rnName, rnNew));
+                if (TryParsePayload(msg, out var rnRoot)
+                    && TryGetString(rnRoot, "name", out var rnName)
+                    && TryGetString(rnRoot, "newName", out var rnNew)
+                    && rnName.Length > 0 && rnNew.Length > 0)
+                {
+                    Task.Run(() => _obs.SetInputName(rnName, rnNew));
+                }
                 break;
 
             // --- Scene Management (Phase 7) ---
             case "create_scene":
-                var cscData = JsonDocument.Parse(msg.Payload);
-                var cscName = cscData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => { _obs.CreateScene(cscName); _scenesCache = null; });
+                if (TryParsePayload(msg, out var cscRoot)
+                    && TryGetString(cscRoot, "name", out var cscName)
+                    && cscName.Length > 0)
+                {
+                    Task.Run(() => { _obs.CreateScene(cscName); _scenesCache = null; });
+                }
                 break;
 
             case "remove_scene":
-                var rmscData = JsonDocument.Parse(msg.Payload);
-                var rmscName = rmscData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => { _obs.RemoveScene(rmscName); _scenesCache = null; });
+                if (TryParsePayload(msg, out var rmscRoot)
+                    && TryGetString(rmscRoot, "name", out var rmscName)
+                    && rmscName.Length > 0)
+                {
+                    Task.Run(() => { _obs.RemoveScene(rmscName); _scenesCache = null; });
+                }
                 break;
 
             case "rename_scene":
-                var rnscData = JsonDocument.Parse(msg.Payload);
-                var rnscOld = rnscData.RootElement.GetProperty("name").GetString() ?? "";
-                var rnscNew = rnscData.RootElement.GetProperty("newName").GetString() ?? "";
-                Task.Run(() => { _obs.RenameScene(rnscOld, rnscNew); _scenesCache = null; });
+                if (TryParsePayload(msg, out var rnscRoot)
+                    && TryGetString(rnscRoot, "name", out var rnscOld)
+                    && TryGetString(rnscRoot, "newName", out var rnscNew)
+                    && rnscOld.Length > 0 && rnscNew.Length > 0)
+                {
+                    Task.Run(() => { _obs.RenameScene(rnscOld, rnscNew); _scenesCache = null; });
+                }
                 break;
 
             // --- Filters (Phase 4) ---
             case "get_filters":
-                var gfData = JsonDocument.Parse(msg.Payload);
-                var gfSource = gfData.RootElement.GetProperty("source").GetString() ?? "";
-                Task.Run(() => _ipc.SendFilters(_obs.GetSourceFilters(gfSource)));
+                if (TryParsePayload(msg, out var gfRoot)
+                    && TryGetString(gfRoot, "source", out var gfSource)
+                    && gfSource.Length > 0)
+                {
+                    Task.Run(() => _ipc.SendFilters(_obs.GetSourceFilters(gfSource)));
+                }
                 break;
 
             case "get_filter_kinds":
@@ -550,67 +634,93 @@ public partial class App : System.Windows.Application
                 break;
 
             case "set_filter_enabled":
-                var feData = JsonDocument.Parse(msg.Payload);
-                var feSrc = feData.RootElement.GetProperty("source").GetString() ?? "";
-                var feFilter = feData.RootElement.GetProperty("filter").GetString() ?? "";
-                var feEnabled = feData.RootElement.GetProperty("enabled").GetBoolean();
-                Task.Run(() => _obs.SetFilterEnabled(feSrc, feFilter, feEnabled));
+                if (TryParsePayload(msg, out var feRoot)
+                    && TryGetString(feRoot, "source", out var feSrc)
+                    && TryGetString(feRoot, "filter", out var feFilter)
+                    && TryGetBool(feRoot, "enabled", out var feEnabled)
+                    && feSrc.Length > 0 && feFilter.Length > 0)
+                {
+                    Task.Run(() => _obs.SetFilterEnabled(feSrc, feFilter, feEnabled));
+                }
                 break;
 
             case "set_filter_index":
-                var fiData = JsonDocument.Parse(msg.Payload);
-                var fiSrc = fiData.RootElement.GetProperty("source").GetString() ?? "";
-                var fiFilter = fiData.RootElement.GetProperty("filter").GetString() ?? "";
-                var fiIdx = fiData.RootElement.GetProperty("index").GetInt32();
-                Task.Run(() => _obs.SetFilterIndex(fiSrc, fiFilter, fiIdx));
+                if (TryParsePayload(msg, out var fiRoot)
+                    && TryGetString(fiRoot, "source", out var fiSrc)
+                    && TryGetString(fiRoot, "filter", out var fiFilter)
+                    && TryGetInt(fiRoot, "index", out var fiIdx)
+                    && fiSrc.Length > 0 && fiFilter.Length > 0 && fiIdx >= 0)
+                {
+                    Task.Run(() => _obs.SetFilterIndex(fiSrc, fiFilter, fiIdx));
+                }
                 break;
 
             case "create_filter":
-                var cfData = JsonDocument.Parse(msg.Payload);
-                var cfSrc = cfData.RootElement.GetProperty("source").GetString() ?? "";
-                var cfName2 = cfData.RootElement.GetProperty("name").GetString() ?? "";
-                var cfKind = cfData.RootElement.GetProperty("kind").GetString() ?? "";
-                Task.Run(() => _obs.CreateFilter(cfSrc, cfName2, cfKind));
+                if (TryParsePayload(msg, out var cfRoot)
+                    && TryGetString(cfRoot, "source", out var cfSrc)
+                    && TryGetString(cfRoot, "name", out var cfName2)
+                    && TryGetString(cfRoot, "kind", out var cfKind)
+                    && cfSrc.Length > 0 && cfName2.Length > 0 && cfKind.Length > 0)
+                {
+                    Task.Run(() => _obs.CreateFilter(cfSrc, cfName2, cfKind));
+                }
                 break;
 
             case "remove_filter":
-                var rfData = JsonDocument.Parse(msg.Payload);
-                var rfSrc = rfData.RootElement.GetProperty("source").GetString() ?? "";
-                var rfFilter = rfData.RootElement.GetProperty("filter").GetString() ?? "";
-                Task.Run(() => _obs.RemoveFilter(rfSrc, rfFilter));
+                if (TryParsePayload(msg, out var rfRoot)
+                    && TryGetString(rfRoot, "source", out var rfSrc)
+                    && TryGetString(rfRoot, "filter", out var rfFilter)
+                    && rfSrc.Length > 0 && rfFilter.Length > 0)
+                {
+                    Task.Run(() => _obs.RemoveFilter(rfSrc, rfFilter));
+                }
                 break;
 
             case "rename_filter":
-                var rnfData = JsonDocument.Parse(msg.Payload);
-                var rnfSrc = rnfData.RootElement.GetProperty("source").GetString() ?? "";
-                var rnfFilter = rnfData.RootElement.GetProperty("filter").GetString() ?? "";
-                var rnfNew = rnfData.RootElement.GetProperty("newName").GetString() ?? "";
-                Task.Run(() => _obs.RenameFilter(rnfSrc, rnfFilter, rnfNew));
+                if (TryParsePayload(msg, out var rnfRoot)
+                    && TryGetString(rnfRoot, "source", out var rnfSrc)
+                    && TryGetString(rnfRoot, "filter", out var rnfFilter)
+                    && TryGetString(rnfRoot, "newName", out var rnfNew)
+                    && rnfSrc.Length > 0 && rnfFilter.Length > 0 && rnfNew.Length > 0)
+                {
+                    Task.Run(() => _obs.RenameFilter(rnfSrc, rnfFilter, rnfNew));
+                }
                 break;
 
             // --- Transitions (Phase 5) ---
             case "set_transition":
-                var stData = JsonDocument.Parse(msg.Payload);
-                var stName = stData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => _obs.SetCurrentTransition(stName));
+                if (TryParsePayload(msg, out var stRoot)
+                    && TryGetString(stRoot, "name", out var stName)
+                    && stName.Length > 0)
+                {
+                    Task.Run(() => _obs.SetCurrentTransition(stName));
+                }
                 break;
 
             case "set_transition_duration":
-                var sdData = JsonDocument.Parse(msg.Payload);
-                var sdDur = sdData.RootElement.GetProperty("duration").GetInt32();
-                Task.Run(() => _obs.SetTransitionDuration(sdDur));
+                if (TryParsePayload(msg, out var sdRoot)
+                    && TryGetInt(sdRoot, "duration", out var sdDur))
+                {
+                    sdDur = Math.Max(sdDur, 0);
+                    Task.Run(() => _obs.SetTransitionDuration(sdDur));
+                }
                 break;
 
             case "toggle_studio_mode":
-                var smData = JsonDocument.Parse(msg.Payload);
-                var smEnabled = smData.RootElement.GetProperty("enabled").GetBoolean();
-                Task.Run(() => _obs.SetStudioModeEnabled(smEnabled));
+                if (TryParsePayload(msg, out var smRoot)
+                    && TryGetBool(smRoot, "enabled", out var smEnabled))
+                {
+                    Task.Run(() => _obs.SetStudioModeEnabled(smEnabled));
+                }
                 break;
 
             case "set_preview_scene":
-                var psData = JsonDocument.Parse(msg.Payload);
-                var psName = psData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => _obs.SetCurrentPreviewScene(psName));
+                if (TryParsePayload(msg, out var psRoot)
+                    && TryGetString(psRoot, "name", out var psName)
+                    && psName.Length > 0)
+                {
+                    Task.Run(() => _obs.SetCurrentPreviewScene(psName));
+                }
                 break;
 
             case "trigger_transition":
@@ -631,9 +741,12 @@ public partial class App : System.Windows.Application
                 break;
 
             case "trigger_hotkey":
-                var hkData = JsonDocument.Parse(msg.Payload);
-                var hkName = hkData.RootElement.GetProperty("name").GetString() ?? "";
-                Task.Run(() => _obs.TriggerHotkey(hkName));
+                if (TryParsePayload(msg, out var hkRoot)
+                    && TryGetString(hkRoot, "name", out var hkName)
+                    && hkName.Length > 0)
+                {
+                    Task.Run(() => _obs.TriggerHotkey(hkName));
+                }
                 break;
 
             case "save_settings":
@@ -651,10 +764,14 @@ public partial class App : System.Windows.Application
                 break;
 
             case "overlay_moved":
-                var posData = JsonDocument.Parse(msg.Payload);
-                _config.OverlayX = posData.RootElement.GetProperty("x").GetInt32();
-                _config.OverlayY = posData.RootElement.GetProperty("y").GetInt32();
-                _configService.Save(_config);
+                if (TryParsePayload(msg, out var posRoot)
+                    && TryGetInt(posRoot, "x", out var posX)
+                    && TryGetInt(posRoot, "y", out var posY))
+                {
+                    _config.OverlayX = posX;
+                    _config.OverlayY = posY;
+                    _configService.Save(_config);
+                }
                 break;
 
             default:
@@ -663,12 +780,83 @@ public partial class App : System.Windows.Application
         }
     }
 
+    // --- Payload Parsing Helpers ---
+
+    /// <summary>
+    /// Safely parses the JSON payload of an IPC message, returning the root element.
+    /// Logs and returns false on malformed JSON.
+    /// </summary>
+    private static bool TryParsePayload(IpcMessage msg, out JsonElement root)
+    {
+        root = default;
+        try
+        {
+            var doc = JsonDocument.Parse(msg.Payload ?? "{}");
+            root = doc.RootElement;
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            Debug.WriteLine($"IPC: Malformed payload for '{msg.Type}': {ex.Message}");
+            return false;
+        }
+    }
+
+    private static bool TryGetString(JsonElement root, string property, out string value)
+    {
+        value = "";
+        if (root.TryGetProperty(property, out var prop) && prop.ValueKind == JsonValueKind.String)
+        {
+            value = prop.GetString() ?? "";
+            return true;
+        }
+        Debug.WriteLine($"IPC: Missing or invalid string property '{property}'.");
+        return false;
+    }
+
+    private static bool TryGetInt(JsonElement root, string property, out int value)
+    {
+        value = 0;
+        if (root.TryGetProperty(property, out var prop) && prop.ValueKind == JsonValueKind.Number
+            && prop.TryGetInt32(out value))
+        {
+            return true;
+        }
+        Debug.WriteLine($"IPC: Missing or invalid int property '{property}'.");
+        return false;
+    }
+
+    private static bool TryGetDouble(JsonElement root, string property, out double value)
+    {
+        value = 0.0;
+        if (root.TryGetProperty(property, out var prop) && prop.ValueKind == JsonValueKind.Number
+            && prop.TryGetDouble(out value) && !double.IsNaN(value) && !double.IsInfinity(value))
+        {
+            return true;
+        }
+        Debug.WriteLine($"IPC: Missing or invalid double property '{property}'.");
+        return false;
+    }
+
+    private static bool TryGetBool(JsonElement root, string property, out bool value)
+    {
+        value = false;
+        if (root.TryGetProperty(property, out var prop)
+            && (prop.ValueKind == JsonValueKind.True || prop.ValueKind == JsonValueKind.False))
+        {
+            value = prop.GetBoolean();
+            return true;
+        }
+        Debug.WriteLine($"IPC: Missing or invalid bool property '{property}'.");
+        return false;
+    }
+
     // --- Save Replay ---
 
     private void HandleSaveReplay()
     {
-        if (_saveInProgress) return;
-        _saveInProgress = true;
+        // Atomically claim the save slot; bail if another call got it first
+        if (Interlocked.CompareExchange(ref _saveInProgress, 1, 0) != 0) return;
 
         try
         {
@@ -697,7 +885,7 @@ public partial class App : System.Windows.Application
         finally
         {
             // Reset after delay to prevent rapid re-triggers
-            Task.Delay(Constants.ButtonDebounceMs).ContinueWith(_ => _saveInProgress = false);
+            Task.Delay(Constants.ButtonDebounceMs).ContinueWith(_ => Interlocked.Exchange(ref _saveInProgress, 0));
         }
     }
 
@@ -730,15 +918,21 @@ public partial class App : System.Windows.Application
         {
             var payload = JsonDocument.Parse(payloadJson).RootElement;
 
-            if (payload.TryGetProperty("showNotifications", out var sn))
+            if (payload.TryGetProperty("showNotifications", out var sn)
+                && (sn.ValueKind == JsonValueKind.True || sn.ValueKind == JsonValueKind.False))
                 _config.ShowNotifications = sn.GetBoolean();
-            if (payload.TryGetProperty("notificationMessage", out var nm))
+            if (payload.TryGetProperty("notificationMessage", out var nm)
+                && nm.ValueKind == JsonValueKind.String)
                 _config.NotificationMessage = nm.GetString() ?? "REPLAY SAVED";
-            if (payload.TryGetProperty("notificationDuration", out var nd))
-                _config.NotificationDuration = nd.GetDouble();
-            if (payload.TryGetProperty("showRecIndicator", out var sri))
+            if (payload.TryGetProperty("notificationDuration", out var nd)
+                && nd.ValueKind == JsonValueKind.Number && nd.TryGetDouble(out var ndVal)
+                && !double.IsNaN(ndVal) && !double.IsInfinity(ndVal))
+                _config.NotificationDuration = Math.Clamp(ndVal, 0.5, 30.0);
+            if (payload.TryGetProperty("showRecIndicator", out var sri)
+                && (sri.ValueKind == JsonValueKind.True || sri.ValueKind == JsonValueKind.False))
                 _config.ShowRecIndicator = sri.GetBoolean();
-            if (payload.TryGetProperty("recIndicatorPosition", out var rip))
+            if (payload.TryGetProperty("recIndicatorPosition", out var rip)
+                && rip.ValueKind == JsonValueKind.String)
                 _config.RecIndicatorPosition = rip.GetString() ?? "top-left";
 
             _configService.Save(_config);

@@ -17,6 +17,11 @@ Write-Host "`n--- C# Host ---" -ForegroundColor Yellow
 dotnet build "$root\src\OBSReplay.Host\OBSReplay.Host.csproj" -c $Configuration
 if ($LASTEXITCODE -ne 0) { throw "C# build failed" }
 
+$hostExe = "$root\src\OBSReplay.Host\bin\$Configuration\net8.0-windows\OBSReplay.exe"
+if (-not (Test-Path $hostExe)) {
+    throw "Host exe not found at $hostExe after build. The C# build may have succeeded but produced no output."
+}
+
 # 2. Build C++ Overlay (requires CMake + MSVC)
 if (-not $SkipOverlay) {
     $overlayDir = "$root\src\OBSReplay.Overlay"
@@ -54,7 +59,7 @@ if (-not $SkipOverlay) {
         cmake --build $buildDir --config $Configuration
         if ($LASTEXITCODE -ne 0) { throw "C++ build failed" }
     } else {
-        Write-Host "`nSkipping C++ overlay build (cmake not found)" -ForegroundColor DarkYellow
+        throw "CMake not found. CMake is required to build the C++ overlay. Install CMake and ensure it is on PATH."
     }
 }
 
@@ -93,8 +98,10 @@ if (Test-Path $overlayExe) {
         Copy-Item $overlayExe "$hostOut\" -Force
         Write-Host "Copied C++ overlay to $hostOut (for dev)" -ForegroundColor Green
     }
+} elseif (-not $SkipOverlay) {
+    throw "Overlay exe not found at $overlayExe. The C++ overlay build may have failed."
 } else {
-    Write-Host "WARNING: Overlay exe not found at $overlayExe" -ForegroundColor Red
+    Write-Host "Overlay exe not found at $overlayExe (skipped)" -ForegroundColor DarkYellow
 }
 
 Write-Host "`n=== Build Complete ===" -ForegroundColor Cyan

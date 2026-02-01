@@ -119,34 +119,29 @@ begin
   Exec('taskkill', '/F /IM OBSReplayOverlay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   // Also kill old Python version if upgrading
   Exec('taskkill', '/F /IM ReplayOverlay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Result := True;
-end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
-begin
-  if CurStep = ssPostInstall then
+  // Check for .NET 8 Desktop Runtime before installation begins
+  if not IsDotNet8DesktopInstalled() then
   begin
-    // Check for .NET 8 Desktop Runtime after install
-    if not IsDotNet8DesktopInstalled() then
+    if MsgBox('.NET 8 Desktop Runtime is required but not installed.' + Chr(13) + Chr(10) +
+              Chr(13) + Chr(10) + 'Would you like to download it now?' + Chr(13) + Chr(10) +
+              '(Choose x64 -> Run desktop apps -> .NET Desktop Runtime 8.x)' + Chr(13) + Chr(10) +
+              Chr(13) + Chr(10) + 'Installation will abort. Please re-run setup after installing the runtime.',
+              mbConfirmation, MB_YESNO) = IDYES then
     begin
-      if MsgBox('.NET 8 Desktop Runtime is required but not installed.' + Chr(13) + Chr(10) +
-                Chr(13) + Chr(10) + 'Would you like to download it now?' + Chr(13) + Chr(10) +
-                '(Choose x64 -> Run desktop apps -> .NET Desktop Runtime 8.x)',
-                mbConfirmation, MB_YESNO) = IDYES then
-
-      begin
-        ShellExec('open', 'https://dotnet.microsoft.com/en-us/download/dotnet/8.0', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
-      end
-      else
-      begin
-        MsgBox('Replay Overlay requires .NET 8 Desktop Runtime to run.' + Chr(13) + Chr(10) +
-               'Please install it from: https://dotnet.microsoft.com/download/dotnet/8.0',
-               mbInformation, MB_OK);
-      end;
+      ShellExec('open', 'https://dotnet.microsoft.com/en-us/download/dotnet/8.0', '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
+    end
+    else
+    begin
+      MsgBox('Replay Overlay requires .NET 8 Desktop Runtime to run.' + Chr(13) + Chr(10) +
+             'Please install it from: https://dotnet.microsoft.com/download/dotnet/8.0',
+             mbInformation, MB_OK);
     end;
+    Result := False;
+    exit;
   end;
+
+  Result := True;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
