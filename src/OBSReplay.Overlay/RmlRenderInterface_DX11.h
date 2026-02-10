@@ -12,8 +12,12 @@ public:
     // Set viewport dimensions (call before rendering)
     void SetViewport(int width, int height);
 
-    // Register an externally-owned SRV as a texture handle (for preview)
+    // Register an externally-owned SRV as a texture handle
     Rml::TextureHandle RegisterExternalTexture(ID3D11ShaderResourceView* srv);
+
+    // Live preview texture: updated each frame, resolved by LoadTexture("__preview__")
+    void SetPreviewTexture(ID3D11ShaderResourceView* srv, int w, int h);
+    void ClearPreviewTexture();
 
     // --- Rml::RenderInterface overrides ---
 
@@ -93,4 +97,10 @@ private:
     // Handle maps
     std::unordered_map<uintptr_t, CompiledGeometry> m_geometries;
     std::unordered_map<uintptr_t, TextureData> m_textures;
+
+    // Live preview texture (SRV updated in-place each frame)
+    ID3D11ShaderResourceView* m_previewSrv = nullptr;
+    int m_previewWidth = 0;
+    int m_previewHeight = 0;
+    uintptr_t m_previewHandle = 0;
 };

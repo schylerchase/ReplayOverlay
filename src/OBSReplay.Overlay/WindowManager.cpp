@@ -22,7 +22,7 @@ bool WindowManager::Init(int width, int height, const wchar_t* title)
     wc.style         = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance      = GetModuleHandle(nullptr);
-    wc.lpszClassName  = L"OBSReplayOverlayClass";
+    wc.lpszClassName  = L"ReplayOverlayClass";
     wc.hCursor        = LoadCursor(nullptr, IDC_ARROW);
 
     if (!RegisterClassExW(&wc))
@@ -57,7 +57,7 @@ void WindowManager::Shutdown()
         DestroyWindow(m_hwnd);
         m_hwnd = nullptr;
     }
-    UnregisterClassW(L"OBSReplayOverlayClass", GetModuleHandle(nullptr));
+    UnregisterClassW(L"ReplayOverlayClass", GetModuleHandle(nullptr));
     s_instance = nullptr;
 }
 
@@ -65,11 +65,19 @@ void WindowManager::SetVisible(bool visible)
 {
     m_panelVisible = visible;
     m_visible = visible;
-    if (!visible && m_hwnd && !m_isClickThrough)
+    if (m_hwnd)
     {
         LONG_PTR ex = GetWindowLongPtrW(m_hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(m_hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT);
-        m_isClickThrough = true;
+        if (visible && m_isClickThrough)
+        {
+            SetWindowLongPtrW(m_hwnd, GWL_EXSTYLE, ex & ~WS_EX_TRANSPARENT);
+            m_isClickThrough = false;
+        }
+        else if (!visible && !m_isClickThrough)
+        {
+            SetWindowLongPtrW(m_hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT);
+            m_isClickThrough = true;
+        }
     }
 }
 

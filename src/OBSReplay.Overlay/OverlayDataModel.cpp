@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 // Fader math (matches C# AudioMathService)
 static int MulToFader(double mul)
@@ -32,6 +33,7 @@ static std::string HumanizeHotkeyName(const std::string& raw)
     if (dotPos != std::string::npos)
         name = name.substr(dotPos + 1);
 
+    // Insert spaces before uppercase runs: "StartStreaming" -> "Start Streaming"
     std::string result;
     for (size_t i = 0; i < name.size(); i++)
     {
@@ -39,7 +41,71 @@ static std::string HumanizeHotkeyName(const std::string& raw)
             result += ' ';
         result += name[i];
     }
+
+    // Replace hyphens/underscores with spaces: "push-to-mute" -> "push to mute"
+    for (auto& ch : result)
+        if (ch == '-' || ch == '_') ch = ' ';
+
+    // Title-case the first letter
+    if (!result.empty())
+        result[0] = static_cast<char>(toupper(result[0]));
+
     return result;
+}
+
+static std::string HumanizeKindName(const std::string& raw)
+{
+    std::string name = raw;
+    // Strip trailing version suffixes like _v2, _v3
+    if (name.size() >= 3)
+    {
+        auto pos = name.rfind("_v");
+        if (pos != std::string::npos && pos + 2 < name.size())
+        {
+            bool allDigits = true;
+            for (size_t i = pos + 2; i < name.size(); i++)
+                if (!isdigit(name[i])) { allDigits = false; break; }
+            if (allDigits)
+                name = name.substr(0, pos);
+        }
+    }
+    // Replace underscores with spaces
+    for (auto& ch : name)
+        if (ch == '_') ch = ' ';
+    // Title-case each word
+    bool newWord = true;
+    for (auto& ch : name)
+    {
+        if (ch == ' ')
+            newWord = true;
+        else if (newWord)
+        {
+            ch = static_cast<char>(toupper(ch));
+            newWord = false;
+        }
+    }
+    return name;
+}
+
+static bool IsUselessHotkey(const std::string& raw, const std::string& display)
+{
+    // Filter bare numbers (source-specific track indices)
+    if (!display.empty() && std::all_of(display.begin(), display.end(), ::isdigit))
+        return true;
+
+    // Only keep OBSBasic.* hotkeys -- these are global actions
+    // (e.g. OBSBasic.StartStreaming, OBSBasic.SaveReplay).
+    // Everything else is per-source noise (mute/unmute/show/hide
+    // repeated for every audio device and scene item).
+    auto dotPos = raw.find('.');
+    if (dotPos != std::string::npos)
+    {
+        std::string prefix = raw.substr(0, dotPos);
+        if (prefix != "OBSBasic")
+            return true;
+    }
+
+    return false;
 }
 
 static Rml::String FormatFloat(double val, int decimals)
@@ -98,6 +164,12 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
         h.RegisterMember("displayName", &HotkeyItem::displayName);
     }
 
+    if (auto h = constructor.RegisterStruct<KindItem>())
+    {
+        h.RegisterMember("id", &KindItem::id);
+        h.RegisterMember("displayName", &KindItem::displayName);
+    }
+
     // Register array types
     constructor.RegisterArray<Rml::Vector<SceneItem>>();
     constructor.RegisterArray<Rml::Vector<SourceItem>>();
@@ -105,6 +177,7 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
     constructor.RegisterArray<Rml::Vector<FilterItem>>();
     constructor.RegisterArray<Rml::Vector<HotkeyItem>>();
     constructor.RegisterArray<Rml::Vector<Rml::String>>();
+    constructor.RegisterArray<Rml::Vector<KindItem>>();
 
     // Bind scalars
     constructor.Bind("active_tab", &m_activeTab);
@@ -114,6 +187,7 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
     constructor.Bind("is_recording", &m_isRecording);
     constructor.Bind("is_recording_paused", &m_isRecordingPaused);
     constructor.Bind("is_buffer_active", &m_isBufferActive);
+    constructor.Bind("is_virtual_cam_active", &m_isVirtualCamActive);
     constructor.Bind("has_active_capture", &m_hasActiveCapture);
     constructor.Bind("current_profile", &m_currentProfile);
     constructor.Bind("current_collection", &m_currentCollection);
@@ -164,6 +238,17 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
     constructor.Bind("adv_sync_ms", &m_advSyncMs);
     constructor.Bind("adv_balance", &m_advBalance);
     constructor.Bind("adv_monitor_type", &m_advMonitorType);
+    constructor.Bind("adv_track_0", &m_advTracks[0]);
+    constructor.Bind("adv_track_1", &m_advTracks[1]);
+    constructor.Bind("adv_track_2", &m_advTracks[2]);
+    constructor.Bind("adv_track_3", &m_advTracks[3]);
+    constructor.Bind("adv_track_4", &m_advTracks[4]);
+    constructor.Bind("adv_track_5", &m_advTracks[5]);
+
+    // Inline form state
+    constructor.Bind("form_mode", &m_formMode);
+    constructor.Bind("form_name", &m_formName);
+    constructor.Bind("form_kind", &m_formKind);
 
     // Notification
     constructor.Bind("notif_active", &m_notifActive);
@@ -190,6 +275,7 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
     constructor.BindEventCallback("toggle_buffer", &OverlayDataModel::OnToggleBuffer, this);
     constructor.BindEventCallback("save_replay", &OverlayDataModel::OnSaveReplay, this);
     constructor.BindEventCallback("toggle_pause", &OverlayDataModel::OnTogglePause, this);
+    constructor.BindEventCallback("toggle_virtual_cam", &OverlayDataModel::OnToggleVirtualCam, this);
     constructor.BindEventCallback("switch_scene", &OverlayDataModel::OnSwitchScene, this);
     constructor.BindEventCallback("toggle_source", &OverlayDataModel::OnToggleSource, this);
     constructor.BindEventCallback("close_overlay", &OverlayDataModel::OnCloseOverlay, this);
@@ -244,6 +330,15 @@ bool OverlayDataModel::Init(Rml::Context* ctx, OverlayState* state,
     constructor.BindEventCallback("rename_scene", &OverlayDataModel::OnRenameScene, this);
     constructor.BindEventCallback("delete_scene", &OverlayDataModel::OnDeleteScene, this);
 
+    // Inline form toggles/confirms
+    constructor.BindEventCallback("toggle_form", &OverlayDataModel::OnToggleSceneForm, this);
+    constructor.BindEventCallback("confirm_form", &OverlayDataModel::OnConfirmSceneForm, this);
+    constructor.BindEventCallback("toggle_source_form", &OverlayDataModel::OnToggleSourceForm, this);
+    constructor.BindEventCallback("confirm_source_form", &OverlayDataModel::OnConfirmSourceForm, this);
+    constructor.BindEventCallback("toggle_filter_form", &OverlayDataModel::OnToggleFilterForm, this);
+    constructor.BindEventCallback("confirm_filter_form", &OverlayDataModel::OnConfirmFilterForm, this);
+    constructor.BindEventCallback("rename_filter", &OverlayDataModel::OnRenameFilter, this);
+
     m_handle = constructor.GetModelHandle();
     return true;
 }
@@ -280,6 +375,7 @@ void OverlayDataModel::SyncFromState()
     syncBool(m_isRecording, m_state->isRecording, "is_recording");
     syncBool(m_isRecordingPaused, m_state->isRecordingPaused, "is_recording_paused");
     syncBool(m_isBufferActive, m_state->isBufferActive, "is_buffer_active");
+    syncBool(m_isVirtualCamActive, m_state->isVirtualCamActive, "is_virtual_cam_active");
     syncBool(m_hasActiveCapture, m_state->hasActiveCapture.value_or(false), "has_active_capture");
     syncStr(m_currentProfile, m_state->currentProfile, "current_profile");
     syncStr(m_currentCollection, m_state->currentSceneCollection, "current_collection");
@@ -334,7 +430,8 @@ void OverlayDataModel::SyncFromState()
         {
             m_sources.clear();
             for (auto& s : m_state->sources)
-                m_sources.push_back({s.id, s.name.c_str(), s.isVisible, s.isLocked, s.sourceKind.c_str()});
+                m_sources.push_back({s.id, s.name.c_str(), s.isVisible, s.isLocked,
+                    HumanizeKindName(s.sourceKind).c_str()});
             m_handle.DirtyVariable("sources");
         }
     }
@@ -433,7 +530,7 @@ void OverlayDataModel::SyncFromState()
         {
             m_filters.clear();
             for (auto& f : m_state->filters)
-                m_filters.push_back({f.name.c_str(), f.kind.c_str(), f.enabled});
+                m_filters.push_back({f.name.c_str(), HumanizeKindName(f.kind).c_str(), f.enabled});
             m_handle.DirtyVariable("filters");
         }
     }
@@ -454,7 +551,8 @@ void OverlayDataModel::SyncFromState()
     if (m_inputKinds.size() != m_state->inputKinds.size())
     {
         m_inputKinds.clear();
-        for (auto& k : m_state->inputKinds) m_inputKinds.push_back(k.c_str());
+        for (auto& k : m_state->inputKinds)
+            m_inputKinds.push_back({k.c_str(), HumanizeKindName(k).c_str()});
         m_handle.DirtyVariable("input_kinds");
     }
 
@@ -462,17 +560,27 @@ void OverlayDataModel::SyncFromState()
     if (m_filterKinds.size() != m_state->filterKinds.size())
     {
         m_filterKinds.clear();
-        for (auto& k : m_state->filterKinds) m_filterKinds.push_back(k.c_str());
+        for (auto& k : m_state->filterKinds)
+            m_filterKinds.push_back({k.c_str(), HumanizeKindName(k).c_str()});
         m_handle.DirtyVariable("filter_kinds");
     }
 
-    // Hotkeys
-    if (m_hotkeys.size() != m_state->hotkeys.size())
+    // Hotkeys (filtered and deduplicated)
     {
-        m_hotkeys.clear();
+        std::set<std::string> seen;
+        Rml::Vector<HotkeyItem> filtered;
         for (auto& h : m_state->hotkeys)
-            m_hotkeys.push_back({h.c_str(), HumanizeHotkeyName(h).c_str()});
-        m_handle.DirtyVariable("hotkeys");
+        {
+            auto display = HumanizeHotkeyName(h);
+            if (IsUselessHotkey(h, display)) continue;
+            if (!seen.insert(display).second) continue; // deduplicate
+            filtered.push_back({h.c_str(), display.c_str()});
+        }
+        if (filtered.size() != m_hotkeys.size() || m_hotkeys.empty())
+        {
+            m_hotkeys = std::move(filtered);
+            m_handle.DirtyVariable("hotkeys");
+        }
     }
 
     // Stats
@@ -598,6 +706,19 @@ void OverlayDataModel::SyncFromState()
                 if (m_advSyncMs != syncVal) { m_advSyncMs = syncVal; m_handle.DirtyVariable("adv_sync_ms"); }
                 if (m_advBalance != balVal) { m_advBalance = balVal; m_handle.DirtyVariable("adv_balance"); }
                 if (m_advMonitorType != monVal) { m_advMonitorType = monVal; m_handle.DirtyVariable("adv_monitor_type"); }
+
+                bool trackInDb = (m_now - db.lastTrackChange) < SliderDebounceS;
+                for (int t = 0; t < 6; t++)
+                {
+                    bool val = trackInDb ? db.userTracks[t] : adv->tracks[t];
+                    if (m_advTracks[t] != val)
+                    {
+                        m_advTracks[t] = val;
+                        char varName[16];
+                        snprintf(varName, sizeof(varName), "adv_track_%d", t);
+                        m_handle.DirtyVariable(varName);
+                    }
+                }
             }
         }
         else
@@ -659,6 +780,13 @@ void OverlayDataModel::UpdateNotification(float dt)
     }
 }
 
+// --- Preview ---
+
+void OverlayDataModel::SetHasPreview(bool v)
+{
+    m_hasPreview = v;
+}
+
 // --- REC indicator ---
 
 void OverlayDataModel::SetRecIndicator(bool active, const std::string& position)
@@ -668,15 +796,12 @@ void OverlayDataModel::SetRecIndicator(bool active, const std::string& position)
         m_recActive = active;
         m_recBlinkTimer = 0.0f;
         m_recDotVisible = true;
-        m_handle.DirtyVariable("rec_active");
         m_handle.DirtyVariable("rec_dot_visible");
     }
-    Rml::String pos = position.c_str();
-    if (m_recPosition != pos)
-    {
-        m_recPosition = pos;
-        m_handle.DirtyVariable("rec_position");
-    }
+    m_recPosition = position.c_str();
+    // Visibility and position classes are set directly on the element
+    // from OverlayApp::Tick(), bypassing data-class-* bindings which
+    // are unreliable when combined with data-if element lifecycle.
 }
 
 void OverlayDataModel::UpdateRecIndicator(float dt)
@@ -809,9 +934,46 @@ void OverlayDataModel::OnExpandAudio(Rml::DataModelHandle handle, Rml::Event&, c
     if (args.empty()) return;
     Rml::String name = args[0].Get<Rml::String>();
     if (m_expandedAudioSource == name)
+    {
         m_expandedAudioSource = "";
+        m_hasAdvanced = false;
+    }
     else
+    {
         m_expandedAudioSource = name;
+
+        // Immediately sync advanced data so track buttons show correct state
+        m_hasAdvanced = false;
+        std::string nameStr(name.c_str());
+        for (auto& adv : m_state->audioAdvanced)
+        {
+            if (adv.name == nameStr)
+            {
+                m_hasAdvanced = true;
+                m_advSyncMs = adv.syncOffsetMs;
+                m_advBalance = static_cast<float>(adv.balance);
+                m_advMonitorType = adv.monitorType;
+
+                // Use debounced track values if user recently changed them
+                auto dbIt = m_advAudioDebounce.find(nameStr);
+                bool trackInDb = dbIt != m_advAudioDebounce.end() &&
+                    (m_now - dbIt->second.lastTrackChange) < SliderDebounceS;
+                for (int t = 0; t < 6; t++)
+                    m_advTracks[t] = trackInDb ? dbIt->second.userTracks[t] : adv.tracks[t];
+
+                handle.DirtyVariable("adv_sync_ms");
+                handle.DirtyVariable("adv_balance");
+                handle.DirtyVariable("adv_monitor_type");
+                for (int t = 0; t < 6; t++)
+                {
+                    char vn[16];
+                    snprintf(vn, sizeof(vn), "adv_track_%d", t);
+                    handle.DirtyVariable(vn);
+                }
+                break;
+            }
+        }
+    }
     handle.DirtyVariable("expanded_audio");
     handle.DirtyVariable("has_advanced");
 }
@@ -856,14 +1018,26 @@ void OverlayDataModel::OnSetTracks(Rml::DataModelHandle, Rml::Event&, const Rml:
     if (args.size() < 3) return;
     std::string name = args[0].Get<Rml::String>().c_str();
     int trackIdx = args[1].Get<int>();
+    if (trackIdx < 0 || trackIdx >= 6) return;
     bool val = args[2].Get<int>() != 0;
 
-    // Find and update the advanced state
     for (auto& adv : m_state->audioAdvanced)
     {
-        if (adv.name == name && trackIdx >= 0 && trackIdx < 6)
+        if (adv.name == name)
         {
-            adv.tracks[trackIdx] = !val; // Toggle
+            adv.tracks[trackIdx] = !val;
+
+            // Immediately update bound variable for visual feedback
+            m_advTracks[trackIdx] = !val;
+            char varName[16];
+            snprintf(varName, sizeof(varName), "adv_track_%d", trackIdx);
+            m_handle.DirtyVariable(varName);
+
+            // Debounce: store user's track state to survive server refreshes
+            auto& db = m_advAudioDebounce[name];
+            db.lastTrackChange = m_now;
+            for (int i = 0; i < 6; i++) db.userTracks[i] = adv.tracks[i];
+
             nlohmann::json payload;
             payload["name"] = name;
             nlohmann::json tArr = nlohmann::json::array();
@@ -1163,6 +1337,11 @@ void OverlayDataModel::OnApplySettings(Rml::DataModelHandle, Rml::Event&, const 
     m_state->notificationDuration = static_cast<double>(m_settingsNotifDur);
     m_state->showRecIndicator = m_settingsShowRec;
     m_state->recIndicatorPosition = std::string(positions[posIdx]);
+
+    // Apply REC indicator immediately (don't wait for config_update round trip)
+    SetRecIndicator(
+        m_state->showRecIndicator && m_state->isBufferActive,
+        m_state->recIndicatorPosition);
 }
 
 void OverlayDataModel::OnOpenSettings(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
@@ -1195,4 +1374,196 @@ void OverlayDataModel::OnDeleteScene(Rml::DataModelHandle, Rml::Event&, const Rm
     nlohmann::json payload;
     payload["name"] = args[0].Get<Rml::String>().c_str();
     m_actions->push_back({"remove_scene", payload});
+}
+
+// --- Virtual Camera ---
+
+void OverlayDataModel::OnToggleVirtualCam(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
+{
+    if (!Debounce("vcam", ButtonDebounceS)) return;
+    m_actions->push_back({"toggle_virtual_cam", {}});
+}
+
+// --- Inline form handlers ---
+// Unified form system: m_formMode selects which form is shown.
+// "create_scene", "rename_scene", "create_source", "rename_source",
+// "create_filter", "rename_filter" or "" (no form).
+
+void OverlayDataModel::OnToggleSceneForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList& args)
+{
+    if (args.empty()) return;
+    std::string mode = args[0].Get<Rml::String>().c_str();
+    if (m_formMode == Rml::String(mode.c_str()))
+        m_formMode = "";
+    else
+    {
+        m_formMode = mode.c_str();
+        m_formName = (mode == "rename_scene") ? m_currentScene : Rml::String("");
+        m_formKind = "";
+    }
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+    handle.DirtyVariable("form_kind");
+}
+
+void OverlayDataModel::OnConfirmSceneForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList&)
+{
+    if (m_formName.empty()) return;
+    std::string name(m_formName.c_str());
+
+    if (m_formMode == "create_scene")
+    {
+        nlohmann::json payload;
+        payload["name"] = name;
+        m_actions->push_back({"create_scene", payload});
+    }
+    else if (m_formMode == "rename_scene")
+    {
+        nlohmann::json payload;
+        payload["name"] = std::string(m_currentScene.c_str());
+        payload["newName"] = name;
+        m_actions->push_back({"rename_scene", payload});
+    }
+
+    m_formMode = "";
+    m_formName = "";
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+}
+
+void OverlayDataModel::OnToggleSourceForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList& args)
+{
+    if (args.empty()) return;
+    std::string mode = args[0].Get<Rml::String>().c_str();
+    if (m_formMode == Rml::String(mode.c_str()))
+        m_formMode = "";
+    else
+    {
+        m_formMode = mode.c_str();
+        m_formName = (mode == "rename_source") ? m_selectedSourceName : Rml::String("");
+        m_formKind = "";
+
+        // Fetch input kinds on first source create
+        if (mode == "create_source" && m_state->inputKinds.empty() && !m_state->inputKindsPending)
+        {
+            m_state->inputKindsPending = true;
+            m_actions->push_back({"get_input_kinds", {}});
+        }
+    }
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+    handle.DirtyVariable("form_kind");
+}
+
+void OverlayDataModel::OnConfirmSourceForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList&)
+{
+    if (m_formName.empty()) return;
+    std::string name(m_formName.c_str());
+
+    if (m_formMode == "create_source")
+    {
+        if (m_formKind.empty()) return;
+        nlohmann::json payload;
+        payload["scene"] = m_state->currentScene;
+        payload["name"] = name;
+        payload["kind"] = std::string(m_formKind.c_str());
+        m_actions->push_back({"create_source", payload});
+    }
+    else if (m_formMode == "rename_source")
+    {
+        nlohmann::json payload;
+        payload["name"] = std::string(m_selectedSourceName.c_str());
+        payload["newName"] = name;
+        m_actions->push_back({"rename_source", payload});
+    }
+
+    m_formMode = "";
+    m_formName = "";
+    m_formKind = "";
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+    handle.DirtyVariable("form_kind");
+}
+
+void OverlayDataModel::OnToggleFilterForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList& args)
+{
+    if (args.empty()) return;
+    std::string mode = args[0].Get<Rml::String>().c_str();
+    if (m_formMode == Rml::String(mode.c_str()))
+        m_formMode = "";
+    else
+    {
+        m_formMode = mode.c_str();
+        m_formKind = "";
+
+        if (mode == "rename_filter" && m_filterSelectedIdx >= 0 &&
+            m_filterSelectedIdx < (int)m_state->filters.size())
+            m_formName = m_state->filters[m_filterSelectedIdx].name.c_str();
+        else
+            m_formName = "";
+
+        // Fetch filter kinds on first filter create
+        if (mode == "create_filter" && m_state->filterKinds.empty() && !m_state->filterKindsPending)
+        {
+            m_state->filterKindsPending = true;
+            m_actions->push_back({"get_filter_kinds", {}});
+        }
+    }
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+    handle.DirtyVariable("form_kind");
+}
+
+void OverlayDataModel::OnConfirmFilterForm(Rml::DataModelHandle handle, Rml::Event&, const Rml::VariantList&)
+{
+    if (m_formName.empty()) return;
+    std::string name(m_formName.c_str());
+    std::string source(m_filterSelectedSource.c_str());
+
+    if (m_formMode == "create_filter")
+    {
+        if (m_formKind.empty()) return;
+        nlohmann::json payload;
+        payload["source"] = source;
+        payload["name"] = name;
+        payload["kind"] = std::string(m_formKind.c_str());
+        m_actions->push_back({"create_filter", payload});
+    }
+    else if (m_formMode == "rename_filter")
+    {
+        if (m_filterSelectedIdx < 0 || m_filterSelectedIdx >= (int)m_state->filters.size()) return;
+        nlohmann::json payload;
+        payload["source"] = source;
+        payload["filter"] = m_state->filters[m_filterSelectedIdx].name;
+        payload["newName"] = name;
+        m_actions->push_back({"rename_filter", payload});
+    }
+
+    // Refresh filters
+    m_state->filtersPending = true;
+    nlohmann::json rp;
+    rp["source"] = source;
+    m_actions->push_back({"get_filters", rp});
+
+    m_formMode = "";
+    m_formName = "";
+    m_formKind = "";
+    handle.DirtyVariable("form_mode");
+    handle.DirtyVariable("form_name");
+    handle.DirtyVariable("form_kind");
+}
+
+void OverlayDataModel::OnRenameFilter(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args)
+{
+    if (args.size() < 2) return;
+    nlohmann::json payload;
+    payload["source"] = std::string(m_filterSelectedSource.c_str());
+    payload["filter"] = args[0].Get<Rml::String>().c_str();
+    payload["newName"] = args[1].Get<Rml::String>().c_str();
+    m_actions->push_back({"rename_filter", payload});
+
+    m_state->filtersPending = true;
+    nlohmann::json rp;
+    rp["source"] = std::string(m_filterSelectedSource.c_str());
+    m_actions->push_back({"get_filters", rp});
 }

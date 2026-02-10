@@ -32,6 +32,11 @@ public:
     // Register an external SRV as a RmlUi texture handle (for preview)
     Rml::TextureHandle RegisterExternalTexture(ID3D11ShaderResourceView* srv);
 
+    // Live preview texture management
+    void SetPreviewTexture(ID3D11ShaderResourceView* srv, int w, int h)
+    { m_rmlRender.SetPreviewTexture(srv, w, h); }
+    void ClearPreviewTexture() { m_rmlRender.ClearPreviewTexture(); }
+
 private:
     void CreateRenderTarget();
     void CleanupRenderTarget();

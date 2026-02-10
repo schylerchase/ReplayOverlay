@@ -301,17 +301,26 @@ public class ObsWebSocketService : IDisposable
                     }
                     catch (Exception ex) { Debug.WriteLine($"GetAudioMonitorType failed for '{name}': {ex.Message}"); }
 
+                    // Bypass buggy SourceTracks parser in obs-websocket-dotnet 5.0.1;
+                    // it returns all-false because it misreads the string-keyed JSON response.
                     try
                     {
-                        var tracks = _obs.GetInputAudioTracks(name);
-                        info.Tracks[0] = tracks.IsTrack1Active;
-                        info.Tracks[1] = tracks.IsTrack2Active;
-                        info.Tracks[2] = tracks.IsTrack3Active;
-                        info.Tracks[3] = tracks.IsTrack4Active;
-                        info.Tracks[4] = tracks.IsTrack5Active;
-                        info.Tracks[5] = tracks.IsTrack6Active;
+                        var reqData = new Newtonsoft.Json.Linq.JObject { ["inputName"] = name };
+                        var resp = _obs.SendRequest("GetInputAudioTracks", reqData);
+                        if (resp?["inputAudioTracks"] is Newtonsoft.Json.Linq.JObject trackObj)
+                        {
+                            for (int t = 0; t < 6; t++)
+                            {
+                                var key = (t + 1).ToString();
+                                if (trackObj[key] is Newtonsoft.Json.Linq.JValue val)
+                                    info.Tracks[t] = (bool)val;
+                            }
+                        }
                     }
-                    catch (Exception ex) { Debug.WriteLine($"GetAudioTracks failed for '{name}': {ex.Message}"); }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"GetAudioTracks failed for '{name}': {ex.Message}");
+                    }
 
                     result.Add(info);
                 }
@@ -659,6 +668,9 @@ public class ObsWebSocketService : IDisposable
 
                 try { state.IsBufferActive = _obs.GetReplayBufferStatus(); }
                 catch (Exception ex) { Debug.WriteLine($"FetchState: GetReplayBufferStatus failed: {ex.Message}"); }
+
+                try { state.IsVirtualCamActive = _obs.GetVirtualCamStatus().IsActive; }
+                catch (Exception ex) { Debug.WriteLine($"FetchState: GetVirtualCamStatus failed: {ex.Message}"); }
 
                 // Transitions
                 try

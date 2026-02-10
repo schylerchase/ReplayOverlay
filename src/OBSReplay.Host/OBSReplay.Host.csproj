@@ -6,7 +6,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>OBSReplay</AssemblyName>
+    <AssemblyName>ReplayOverlay</AssemblyName>
     <RootNamespace>OBSReplay.Host</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <StartupObject>OBSReplay.Host.Program</StartupObject>
@@ -26,7 +26,7 @@
   <!-- Copy overlay exe to output directory if it exists -->
   <Target Name="CopyOverlayExe" AfterTargets="Build">
     <PropertyGroup>
-      <OverlayExe>$(MSBuildThisFileDirectory)..\..\build\overlay\bin\$(Configuration)\OBSReplayOverlay.exe</OverlayExe>
+      <OverlayExe>$(MSBuildThisFileDirectory)..\..\build\overlay\bin\$(Configuration)\OverlayRenderer.exe</OverlayExe>
     </PropertyGroup>
     <Copy SourceFiles="$(OverlayExe)" DestinationFolder="$(OutputPath)"
           Condition="Exists('$(OverlayExe)')" SkipUnchangedFiles="true" />

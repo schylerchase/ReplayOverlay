@@ -6,7 +6,7 @@
 #define MyAppVersion "2.0.0"
 #define MyAppPublisher "ReplayOverlay"
 #define MyAppURL "https://github.com/schylerchase/replay-overlay-interactive"
-#define MyAppExeName "OBSReplay.exe"
+#define MyAppExeName "ReplayOverlay.exe"
 #define HostOutputDir "src\OBSReplay.Host\bin\Release\net8.0-windows"
 #define OverlayOutputDir "build\overlay\bin\Release"
 ; NOTE: CMake outputs to build\overlay\bin\{Config}\ via RUNTIME_OUTPUT_DIRECTORY
@@ -31,7 +31,7 @@ WizardStyle=modern
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
-CloseApplicationsFilter=OBSReplay.exe,OBSReplayOverlay.exe
+CloseApplicationsFilter=ReplayOverlay.exe,OverlayRenderer.exe
 ; Add/Remove Programs metadata
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
@@ -48,13 +48,13 @@ Name: "startupicon"; Description: "Start with Windows"; GroupDescription: "Start
 
 [Files]
 ; C# Host (exe + all dependency DLLs + runtime config)
-Source: "{#HostOutputDir}\OBSReplay.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#HostOutputDir}\OBSReplay.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#HostOutputDir}\OBSReplay.deps.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#HostOutputDir}\OBSReplay.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#HostOutputDir}\ReplayOverlay.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#HostOutputDir}\ReplayOverlay.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#HostOutputDir}\ReplayOverlay.deps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#HostOutputDir}\ReplayOverlay.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#HostOutputDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; C++ Overlay
-Source: "{#OverlayOutputDir}\OBSReplayOverlay.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#OverlayOutputDir}\OverlayRenderer.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -65,8 +65,8 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent runascurrentuser
 
 [UninstallRun]
-Filename: "taskkill"; Parameters: "/F /IM OBSReplay.exe"; Flags: runhidden; RunOnceId: "KillHost"
-Filename: "taskkill"; Parameters: "/F /IM OBSReplayOverlay.exe"; Flags: runhidden; RunOnceId: "KillOverlay"
+Filename: "taskkill"; Parameters: "/F /IM ReplayOverlay.exe"; Flags: runhidden; RunOnceId: "KillHost"
+Filename: "taskkill"; Parameters: "/F /IM OverlayRenderer.exe"; Flags: runhidden; RunOnceId: "KillOverlay"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\ReplayOverlay"
@@ -77,8 +77,13 @@ Type: filesandordirs; Name: "{app}"
 Type: files; Name: "{userstartup}\{#MyAppName}.lnk"
 Type: files; Name: "{userstartup}\Replay Overlay.lnk"
 Type: files; Name: "{commonstartup}\{#MyAppName}.lnk"
-; Clean up old Python version files
-Type: files; Name: "{app}\ReplayOverlay.exe"
+; Clean up old OBS-named files from previous versions
+Type: files; Name: "{app}\OBSReplay.exe"
+Type: files; Name: "{app}\OBSReplay.dll"
+Type: files; Name: "{app}\OBSReplay.deps.json"
+Type: files; Name: "{app}\OBSReplay.runtimeconfig.json"
+Type: files; Name: "{app}\OBSReplay.pdb"
+Type: files; Name: "{app}\OBSReplayOverlay.exe"
 
 [Registry]
 ; Clean up old registry startup entries
@@ -114,11 +119,11 @@ function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
 begin
-  // Kill running instances
+  // Kill running instances (current + old OBS-named versions)
+  Exec('taskkill', '/F /IM ReplayOverlay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill', '/F /IM OverlayRenderer.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM OBSReplay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec('taskkill', '/F /IM OBSReplayOverlay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  // Also kill old Python version if upgrading
-  Exec('taskkill', '/F /IM ReplayOverlay.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   // Check for .NET 8 Desktop Runtime before installation begins
   if not IsDotNet8DesktopInstalled() then
@@ -149,7 +154,7 @@ begin
   if CurUninstallStep = usPostUninstall then
   begin
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ReplayOverlay');
-    RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'OBSReplay');
+    RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'OBSReplay');  // legacy cleanup
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ReplayOverlay');
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ReplayOverlayInteractive');
   end;

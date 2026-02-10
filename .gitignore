@@ -4,6 +4,7 @@ config.json
 # Build outputs
 build/
 dist/
+publish/
 *.spec
 installer_output/
 

@@ -1,5 +1,5 @@
 # Test pipe sender - simulates the C# host sending a state_update message
-# Run the overlay first with: .\build\overlay\bin\Release\OBSReplayOverlay.exe --pipe TestPipe
+# Run the overlay first with: .\build\overlay\bin\Release\OverlayRenderer.exe --pipe TestPipe
 
 $pipeName = "TestPipe"
 

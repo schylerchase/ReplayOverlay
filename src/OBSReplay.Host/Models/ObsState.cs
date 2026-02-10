@@ -31,6 +31,9 @@ public class ObsState
     [JsonPropertyName("isBufferActive")]
     public bool IsBufferActive { get; set; }
 
+    [JsonPropertyName("isVirtualCamActive")]
+    public bool IsVirtualCamActive { get; set; }
+
     [JsonPropertyName("hasActiveCapture")]
     public bool? HasActiveCapture { get; set; }
 

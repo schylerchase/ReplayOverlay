@@ -75,10 +75,8 @@ public partial class App : System.Windows.Application
         _hotkeys.Initialize();
         _hotkeys.ToggleHotkeyPressed += OnToggleHotkey;
         _hotkeys.SaveHotkeyPressed += OnSaveHotkey;
-        if (_config.HotkeyEnabled)
-            _hotkeys.Register(_config.ToggleHotkey, _config.SaveHotkey);
 
-        // --- Tray icon ---
+        // --- Tray icon (before hotkey registration so balloon notifications work) ---
         _tray.Initialize();
         _tray.ShowOverlayClicked += () => ToggleOverlay();
         _tray.SaveReplayClicked += () => Task.Run(HandleSaveReplay);
@@ -88,6 +86,13 @@ public partial class App : System.Windows.Application
         _tray.OpenLibraryClicked += _ => OpenLibrary();
         _tray.RestartClicked += OnRestart;
         _tray.ExitClicked += () => Shutdown();
+
+        // --- Register hotkeys (after tray so balloon notifications work) ---
+        LogToFile($"HotkeyEnabled={_config.HotkeyEnabled}, Toggle='{_config.ToggleHotkey}', Save='{_config.SaveHotkey}'");
+        if (_config.HotkeyEnabled)
+            RegisterHotkeysAndNotify(_config.ToggleHotkey, _config.SaveHotkey);
+        else
+            LogToFile("Hotkeys DISABLED in config -- skipping registration");
 
         // --- File watcher ---
         _replayFiles.Start(_config.WatchFolder);
@@ -348,6 +353,31 @@ public partial class App : System.Windows.Application
 
     // --- Hotkey Handlers ---
 
+    private void RegisterHotkeysAndNotify(string toggleKey, string saveKey)
+    {
+        var (toggleOk, saveOk) = _hotkeys.Register(toggleKey, saveKey);
+        var status = $"toggle={toggleKey}({(toggleOk ? "OK" : "FAIL")}), save={saveKey}({(saveOk ? "OK" : "FAIL")})";
+        LogToFile($"Hotkey registration result: {status}");
+
+        if (!toggleOk || !saveOk)
+        {
+            var failed = new List<string>();
+            if (!toggleOk) failed.Add($"Toggle ({HotkeyService.FormatHotkeyDisplay(toggleKey)})");
+            if (!saveOk) failed.Add($"Save ({HotkeyService.FormatHotkeyDisplay(saveKey)})");
+            _tray.ShowBalloon("Hotkey Registration Failed",
+                $"Could not register: {string.Join(", ", failed)}. " +
+                "Another app may be using the same key.",
+                System.Windows.Forms.ToolTipIcon.Warning);
+        }
+        else
+        {
+            _tray.ShowBalloon("Hotkeys Active",
+                $"Toggle: {HotkeyService.FormatHotkeyDisplay(toggleKey)}, " +
+                $"Save: {HotkeyService.FormatHotkeyDisplay(saveKey)}",
+                System.Windows.Forms.ToolTipIcon.Info);
+        }
+    }
+
     private void OnToggleHotkey()
     {
         Dispatcher.BeginInvoke(ToggleOverlay);
@@ -404,7 +434,7 @@ public partial class App : System.Windows.Application
                     && TryGetString(volRoot, "name", out var volName)
                     && TryGetDouble(volRoot, "volumeMul", out var volMul))
                 {
-                    volMul = Math.Clamp(volMul, 0.0, 1.0);
+                    volMul = Math.Max(volMul, 0.0);
                     if (volName.Length > 0)
                         Task.Run(() => _obs.SetInputVolume(volName, volMul));
                 }
@@ -433,6 +463,10 @@ public partial class App : System.Windows.Application
 
             case "toggle_record_pause":
                 Task.Run(() => _obs.ToggleRecordPause());
+                break;
+
+            case "toggle_virtual_cam":
+                Task.Run(() => _obs.ToggleVirtualCam());
                 break;
 
             case "save_replay":
@@ -1010,7 +1044,7 @@ public partial class App : System.Windows.Application
             oldConfig.HotkeyEnabled != newConfig.HotkeyEnabled)
         {
             if (newConfig.HotkeyEnabled)
-                _hotkeys.Register(newConfig.ToggleHotkey, newConfig.SaveHotkey);
+                RegisterHotkeysAndNotify(newConfig.ToggleHotkey, newConfig.SaveHotkey);
             else
                 _hotkeys.Unregister();
         }
@@ -1025,6 +1059,24 @@ public partial class App : System.Windows.Application
         // Update Windows startup if changed
         if (oldConfig.StartWithWindows != newConfig.StartWithWindows)
             AdminService.SetWindowsStartup(newConfig.StartWithWindows);
+    }
+
+    // --- Diagnostics ---
+
+    private static readonly string DiagLogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "ReplayOverlay", "hotkey.log");
+
+    private static void LogToFile(string message)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(DiagLogPath)!;
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(DiagLogPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { /* best-effort */ }
     }
 
     // --- Shutdown ---

@@ -42,6 +42,9 @@ bool OverlayApp::Init(const std::string& pipeName)
     // Load the overlay document (uses data-model="overlay")
     m_renderer.LoadOverlayDocument();
 
+    // Panel starts hidden until host sends show_overlay
+    SetPanelHidden(true);
+
     // Connect to host via named pipe
     if (m_ipc.Connect(pipeName))
     {
@@ -54,6 +57,7 @@ bool OverlayApp::Init(const std::string& pipeName)
 
 void OverlayApp::Shutdown()
 {
+    m_renderer.ClearPreviewTexture();
     m_preview.Release();
     m_renderer.Shutdown();
     m_window.Shutdown();
@@ -93,7 +97,13 @@ bool OverlayApp::Tick()
         {
             m_reconnectTimer = 0.0f;
             if (m_ipc.Connect(m_pipeName))
+            {
+                m_configReceived = false;
+                m_renderer.ClearPreviewTexture();
+                m_preview.Release();
+                m_dataModel.SetHasPreview(false);
                 m_ipc.SendMessage({"ready", {}});
+            }
         }
     }
 
@@ -111,19 +121,81 @@ bool OverlayApp::Tick()
     // Send any actions queued by the data model
     SendPendingActions();
 
-    // Update panel rect for click-through based on document element
+    // Process data model changes (data-if element creation/destruction, layout)
+    // Must happen BEFORE direct element manipulation so GetElementById returns
+    // freshly (re)created elements from data-if tab switches.
     auto* ctx = m_renderer.GetRmlContext();
+    if (ctx) ctx->Update();
+
+    // Update element state directly (bypasses unreliable data-class-* bindings)
     if (ctx)
     {
         auto* body = ctx->GetRootElement();
         if (body)
         {
-            // Find the .panel element for hit-testing bounds
+            // REC indicator: toggle hidden class + set position properties
+            auto* recEl = body->GetElementById("rec-indicator");
+            if (recEl)
+            {
+                bool active = m_dataModel.IsRecActive();
+                std::string pos = m_dataModel.GetRecPosition();
+
+                recEl->SetClass("hidden", !active);
+
+                // Position via CSS classes -- removing a class cleanly
+                // removes its properties from the cascade.
+                recEl->SetClass("pos-tl", active && pos == "top-left");
+                recEl->SetClass("pos-tc", active && pos == "top-center");
+                recEl->SetClass("pos-tr", active && pos == "top-right");
+                recEl->SetClass("pos-bl", active && pos == "bottom-left");
+                recEl->SetClass("pos-bc", active && pos == "bottom-center");
+                recEl->SetClass("pos-br", active && pos == "bottom-right");
+            }
+
+            // Preview: toggle image/placeholder visibility via SetProperty
+            // Elements live inside data-if tab block; null when tab != 'main'
+            auto* previewImg = body->GetElementById("preview-img");
+            auto* previewPlaceholder = body->GetElementById("preview-placeholder");
+            if (previewImg && previewPlaceholder)
+            {
+                if (m_dataModel.HasPreview())
+                {
+                    previewImg->SetProperty("display", "block");
+                    previewPlaceholder->SetProperty("display", "none");
+
+                    // Compute width from actual video aspect ratio to avoid
+                    // RmlUi's cached 1x1 placeholder intrinsic dimensions.
+                    int pw = m_preview.GetWidth();
+                    int ph = m_preview.GetHeight();
+                    if (pw > 0 && ph > 0)
+                    {
+                        // Fill container height (140dp), compute matching width
+                        constexpr int containerH = 140;
+                        int w = containerH * pw / ph;
+                        previewImg->SetProperty("height", std::to_string(containerH) + "dp");
+                        previewImg->SetProperty("width", std::to_string(w) + "dp");
+                    }
+                    else
+                    {
+                        previewImg->SetProperty("width", "100%");
+                        previewImg->SetProperty("height", "100%");
+                    }
+                }
+                else
+                {
+                    previewImg->SetProperty("display", "none");
+                    previewPlaceholder->RemoveProperty("display");
+                }
+            }
+
+            // Second Update() processes style/attribute changes made above
+            // (display toggles, src changes) so layout is correct this frame.
+            ctx->Update();
+
+            // Update panel rect for click-through based on document element
             auto* panel = body->GetElementById("panel");
             if (!panel)
             {
-                // Fallback: use first child of body that has content
-                // The panel class element is the main content
                 for (int i = 0; i < body->GetNumChildren(); i++)
                 {
                     auto* child = body->GetChild(i);
@@ -171,20 +243,41 @@ void OverlayApp::ProcessIpcMessages()
         {
             if (type == "state_update")
             {
+                bool wasBuf = m_state.isBufferActive;
                 m_state.UpdateFromStateJson(msg->payload);
+                // Sync REC indicator when buffer status changes via state_update
+                // (only after config_update so we have the correct position)
+                if (m_configReceived && m_state.isBufferActive != wasBuf)
+                {
+                    m_dataModel.SetRecIndicator(
+                        m_state.showRecIndicator && m_state.isBufferActive,
+                        m_state.recIndicatorPosition);
+                }
             }
             else if (type == "preview_frame")
             {
                 if (msg->payload.contains("base64") && msg->payload["base64"].is_string())
                 {
                     auto base64 = msg->payload["base64"].get<std::string>();
+                    m_renderer.ClearPreviewTexture(); // detach before old SRV is freed
                     m_preview.UpdateFromBase64(m_renderer, base64);
+                    if (m_preview.GetTexture())
+                    {
+                        m_renderer.SetPreviewTexture(
+                            m_preview.GetTexture(), m_preview.GetWidth(), m_preview.GetHeight());
+                        m_dataModel.SetHasPreview(true);
+                    }
+                    else
+                    {
+                        m_dataModel.SetHasPreview(false);
+                    }
                 }
             }
             else if (type == "config_update")
             {
                 m_state.UpdateFromConfigJson(msg->payload);
-                // Update REC indicator from config
+                m_configReceived = true;
+                // Update REC indicator from config (now has correct position)
                 m_dataModel.SetRecIndicator(
                     m_state.showRecIndicator && m_state.isBufferActive,
                     m_state.recIndicatorPosition);
@@ -194,17 +287,20 @@ void OverlayApp::ProcessIpcMessages()
                 m_state.overlayVisible = true;
                 m_window.SetVisible(true);
                 m_window.SetTopmost(true);
+                SetPanelHidden(false);
             }
             else if (type == "hide_overlay")
             {
                 m_state.overlayVisible = false;
                 m_window.SetVisible(false);
+                SetPanelHidden(true);
             }
             else if (type == "settings_opened")
             {
                 m_state.overlayVisible = false;
                 m_window.SetVisible(false);
                 m_window.SetTopmost(false);
+                SetPanelHidden(true);
             }
             else if (type == "settings_closed")
             {
@@ -246,6 +342,7 @@ void OverlayApp::ProcessIpcMessages()
             }
             else if (type == "rec_indicator")
             {
+                if (!m_configReceived) continue; // Wait for config before using position
                 bool active = msg->payload.value("active", false);
                 std::string pos = msg->payload.value("position", m_state.recIndicatorPosition);
                 if (m_state.showRecIndicator)
@@ -263,6 +360,25 @@ void OverlayApp::ProcessIpcMessages()
         catch (...)
         {
             DebugLog((std::string("Unknown exception handling '") + type + "'").c_str());
+        }
+    }
+}
+
+void OverlayApp::SetPanelHidden(bool hidden)
+{
+    auto* ctx = m_renderer.GetRmlContext();
+    if (!ctx) return;
+    auto* body = ctx->GetRootElement();
+    if (!body) return;
+    auto* panel = body->GetElementById("panel");
+    if (panel)
+    {
+        panel->SetClass("hidden", hidden);
+        if (!hidden)
+        {
+            // Force margin recalculation after display:none -> display:flex
+            // RmlUi doesn't reliably recompute margin:auto after visibility toggle
+            panel->SetProperty("margin", "40dp auto 0 auto");
         }
     }
 }

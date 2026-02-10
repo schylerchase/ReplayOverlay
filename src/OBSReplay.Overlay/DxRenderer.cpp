@@ -98,6 +98,7 @@ bool DxRenderer::InitRmlUi(HWND hwnd, int width, int height)
         if (!Rml::LoadFontFace(basePath + "segoeui.ttf", true))
             Rml::LoadFontFace(basePath + "arial.ttf", true);
         Rml::LoadFontFace(basePath + "segoeuib.ttf", false); // Bold variant
+        Rml::LoadFontFace(basePath + "segmdl2.ttf", false);  // Icon font (Segoe MDL2 Assets)
     }
 
     // Create context at viewport size
@@ -186,7 +187,8 @@ void DxRenderer::EndFrame()
 {
     if (m_rmlContext)
     {
-        m_rmlContext->Update();
+        // Update() is called earlier in OverlayApp::Tick() so that direct
+        // element manipulation (SetAttribute) happens after data-if processing.
         m_rmlContext->Render();
     }
     m_swapChain->Present(1, 0); // VSync on

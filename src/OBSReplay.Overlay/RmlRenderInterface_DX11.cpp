@@ -443,9 +443,51 @@ void RmlRenderInterface_DX11::ReleaseGeometry(Rml::CompiledGeometryHandle handle
 Rml::TextureHandle RmlRenderInterface_DX11::LoadTexture(Rml::Vector2i& dimensions,
                                                          const Rml::String& source)
 {
-    // We embed assets as strings, so file loading is not needed for now
-    // Return 0 (invalid) to signal failure
+    // Virtual texture for live OBS preview.
+    // Use find() because RmlUi's JoinPath may prepend a document path.
+    // Always return a valid handle so RmlUi caches it; SetPreviewTexture()
+    // updates the texture map entry when a real frame arrives.
+    if (source.find("__preview__") != Rml::String::npos)
+    {
+        if (m_previewHandle == 0)
+            m_previewHandle = m_nextTextureHandle++;
+
+        if (m_previewSrv)
+        {
+            dimensions.x = m_previewWidth;
+            dimensions.y = m_previewHeight;
+            m_textures[m_previewHandle] = { m_previewSrv, true };
+        }
+        else
+        {
+            dimensions.x = 1;
+            dimensions.y = 1;
+            m_textures[m_previewHandle] = { m_whiteTexture, true };
+        }
+        return static_cast<Rml::TextureHandle>(m_previewHandle);
+    }
     return {};
+}
+
+void RmlRenderInterface_DX11::SetPreviewTexture(ID3D11ShaderResourceView* srv, int w, int h)
+{
+    m_previewSrv = srv;
+    m_previewWidth = w;
+    m_previewHeight = h;
+    // Keep the texture map entry pointing to the latest SRV
+    if (m_previewHandle != 0)
+        m_textures[m_previewHandle] = { srv, true };
+}
+
+void RmlRenderInterface_DX11::ClearPreviewTexture()
+{
+    m_previewSrv = nullptr;
+    m_previewWidth = 0;
+    m_previewHeight = 0;
+    // Preserve the handle -- RmlUi's FileTextureDatabase still references it.
+    // Replace the SRV with the white placeholder so the old SRV can be safely freed.
+    if (m_previewHandle != 0)
+        m_textures[m_previewHandle] = { m_whiteTexture, true };
 }
 
 Rml::TextureHandle RmlRenderInterface_DX11::GenerateTexture(

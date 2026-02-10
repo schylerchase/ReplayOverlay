@@ -36,8 +36,8 @@ public static class Constants
     public const double FaderLogOffsetDb = 6.0;
 
     // IPC
-    public const string PipeName = "OBSReplayOverlayPipe";
-    public const string OverlayExeName = "OBSReplayOverlay.exe";
+    public const string PipeName = "ReplayOverlayPipe";
+    public const string OverlayExeName = "OverlayRenderer.exe";
 
     // REC indicator blink
     public const int RecBlinkIntervalMs = 500;

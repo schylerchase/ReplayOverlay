@@ -91,6 +91,12 @@ public class TrayIconService : IDisposable
         return Icon.FromHandle(bmp.GetHicon());
     }
 
+    public void ShowBalloon(string title, string text, ToolTipIcon icon = ToolTipIcon.Info,
+        int timeoutMs = 3000)
+    {
+        _icon?.ShowBalloonTip(timeoutMs, title, text, icon);
+    }
+
     public void Dispose()
     {
         if (_icon != null)

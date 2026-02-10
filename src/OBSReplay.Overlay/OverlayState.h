@@ -62,6 +62,7 @@ struct OverlayState
     bool isRecording = false;
     bool isRecordingPaused = false;
     bool isBufferActive = false;
+    bool isVirtualCamActive = false;
     std::optional<bool> hasActiveCapture;
     bool overlayVisible = false;
 
@@ -124,6 +125,8 @@ struct OverlayState
             isRecordingPaused = j["isRecordingPaused"].get<bool>();
         if (j.contains("isBufferActive") && j["isBufferActive"].is_boolean())
             isBufferActive = j["isBufferActive"].get<bool>();
+        if (j.contains("isVirtualCamActive") && j["isVirtualCamActive"].is_boolean())
+            isVirtualCamActive = j["isVirtualCamActive"].get<bool>();
 
         if (j.contains("hasActiveCapture") && !j["hasActiveCapture"].is_null())
             hasActiveCapture = j["hasActiveCapture"].get<bool>();

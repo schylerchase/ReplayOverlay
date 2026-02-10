@@ -17,6 +17,7 @@ public:
 private:
     void ProcessIpcMessages();
     void SendPendingActions();
+    void SetPanelHidden(bool hidden);
     double GetElapsedTime() const;
 
     WindowManager         m_window;
@@ -29,6 +30,7 @@ private:
     std::string           m_pipeName;
     std::vector<IpcMessage> m_pendingActions;
     bool                  m_shouldExit = false;
+    bool                  m_configReceived = false;
     float                 m_reconnectTimer = 0.0f;
     static constexpr float ReconnectIntervalS = 2.0f;
 

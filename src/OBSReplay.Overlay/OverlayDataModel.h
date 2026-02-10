@@ -26,6 +26,16 @@ public:
     // REC indicator
     void SetRecIndicator(bool active, const std::string& position);
     void UpdateRecIndicator(float dt);
+    bool IsRecActive() const { return m_recActive; }
+    std::string GetRecPosition() const { return std::string(m_recPosition.c_str()); }
+
+    // Audio track state (for direct DOM manipulation in render loop)
+    bool IsAudioAdvancedVisible() const { return m_hasAdvanced && !m_expandedAudioSource.empty(); }
+    const bool* GetAdvTracks() const { return m_advTracks; }
+
+    // Preview
+    void SetHasPreview(bool v);
+    bool HasPreview() const { return m_hasPreview; }
 
 private:
     // Event callbacks (called from RML data-event-click)
@@ -35,6 +45,7 @@ private:
     void OnToggleBuffer(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnSaveReplay(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnTogglePause(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnToggleVirtualCam(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnSwitchScene(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnToggleSource(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnCloseOverlay(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
@@ -89,6 +100,15 @@ private:
     void OnRenameScene(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
     void OnDeleteScene(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
 
+    // Inline form toggles/confirms
+    void OnToggleSceneForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnConfirmSceneForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnToggleSourceForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnConfirmSourceForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnToggleFilterForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnConfirmFilterForm(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+    void OnRenameFilter(Rml::DataModelHandle handle, Rml::Event& ev, const Rml::VariantList& args);
+
     // Debounce helper
     bool Debounce(const std::string& key, double interval = 2.0);
 
@@ -113,6 +133,9 @@ private:
     float m_notifAlpha = 0.0f;
     float m_notifTimer = 0.0f;
     float m_notifDuration = 3.0f;
+
+    // Preview state
+    bool m_hasPreview = false;
 
     // REC indicator state
     bool m_recActive = false;
@@ -146,6 +169,8 @@ private:
         int userSyncMs = 0;
         double lastBalChange = 0.0;
         double userBalance = 0.5;
+        double lastTrackChange = 0.0;
+        bool userTracks[6] = {};
     };
     std::unordered_map<std::string, AdvAudioDebounce> m_advAudioDebounce;
 
@@ -161,6 +186,7 @@ private:
     bool m_isRecording = false;
     bool m_isRecordingPaused = false;
     bool m_isBufferActive = false;
+    bool m_isVirtualCamActive = false;
     bool m_hasActiveCapture = false;
     Rml::String m_currentProfile;
     Rml::String m_currentCollection;
@@ -177,6 +203,7 @@ private:
     struct AudioItem { Rml::String name; double volumeMul; bool muted; int faderVal; };
     struct FilterItem { Rml::String name; Rml::String kind; bool enabled; };
     struct HotkeyItem { Rml::String rawName; Rml::String displayName; };
+    struct KindItem { Rml::String id; Rml::String displayName; };
 
     Rml::Vector<SceneItem> m_scenes;
     Rml::Vector<SourceItem> m_sources;
@@ -186,8 +213,8 @@ private:
     Rml::Vector<Rml::String> m_transitions;
     Rml::Vector<FilterItem> m_filters;
     Rml::Vector<Rml::String> m_filterSources;
-    Rml::Vector<Rml::String> m_inputKinds;
-    Rml::Vector<Rml::String> m_filterKinds;
+    Rml::Vector<KindItem> m_inputKinds;
+    Rml::Vector<KindItem> m_filterKinds;
     Rml::Vector<HotkeyItem> m_hotkeys;
 
     // Stats
@@ -210,4 +237,9 @@ private:
     float m_advBalance = 0.5f;
     int m_advMonitorType = 0;
     bool m_advTracks[6] = {};
+
+    // Inline form state
+    Rml::String m_formMode;       // "create_scene", "rename_scene", "create_source", etc. or ""
+    Rml::String m_formName;       // text input value
+    Rml::String m_formKind;       // kind dropdown value (for create source/filter)
 };

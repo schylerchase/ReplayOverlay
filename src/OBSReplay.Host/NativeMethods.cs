@@ -29,6 +29,44 @@ internal static partial class NativeMethods
 
     internal const int WM_HOTKEY = 0x0312;
 
+    // --- User32: Low-level keyboard hook ---
+
+    internal delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn,
+        IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [LibraryImport("user32.dll")]
+    internal static partial short GetAsyncKeyState(int vKey);
+
+    internal const int WH_KEYBOARD_LL = 13;
+    internal const int WM_KEYDOWN = 0x0100;
+    internal const int WM_SYSKEYDOWN = 0x0104;
+    internal const int HC_ACTION = 0;
+    internal const int VK_CONTROL = 0x11;
+    internal const int VK_SHIFT = 0x10;
+    internal const int VK_MENU = 0x12;    // Alt
+    internal const int VK_LWIN = 0x5B;
+    internal const int VK_RWIN = 0x5C;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct KBDLLHOOKSTRUCT
+    {
+        public uint vkCode;
+        public uint scanCode;
+        public uint flags;
+        public uint time;
+        public IntPtr dwExtraInfo;
+    }
+
     // --- Kernel32: Process functions ---
 
     [LibraryImport("kernel32.dll", SetLastError = true)]

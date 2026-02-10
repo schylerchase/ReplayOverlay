@@ -39,7 +39,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int)
     CrashLog("Overlay starting");
 
     // Parse command line for --pipe <name>
-    std::string pipeName = "OBSReplayOverlayPipe"; // default
+    std::string pipeName = "ReplayOverlayPipe"; // default
 
     std::string cmdLine(lpCmdLine);
     auto pipePos = cmdLine.find("--pipe");
