@@ -14,17 +14,17 @@ Write-Host "=== Building Replay Overlay ($Configuration) ===" -ForegroundColor C
 
 # 1. Build C# Host
 Write-Host "`n--- C# Host ---" -ForegroundColor Yellow
-dotnet build "$root\src\OBSReplay.Host\OBSReplay.Host.csproj" -c $Configuration
+dotnet build "$root\src\ReplayOverlay.Host\ReplayOverlay.Host.csproj" -c $Configuration
 if ($LASTEXITCODE -ne 0) { throw "C# build failed" }
 
-$hostExe = "$root\src\OBSReplay.Host\bin\$Configuration\net8.0-windows\ReplayOverlay.exe"
+$hostExe = "$root\src\ReplayOverlay.Host\bin\$Configuration\net8.0-windows\ReplayOverlay.exe"
 if (-not (Test-Path $hostExe)) {
     throw "Host exe not found at $hostExe after build. The C# build may have succeeded but produced no output."
 }
 
 # 2. Build C++ Overlay (requires CMake + MSVC)
 if (-not $SkipOverlay) {
-    $overlayDir = "$root\src\OBSReplay.Overlay"
+    $overlayDir = "$root\src\ReplayOverlay.Overlay"
     $buildDir = "$root\build\overlay"
 
     if (Get-Command cmake -ErrorAction SilentlyContinue) {
@@ -66,7 +66,7 @@ if (-not $SkipOverlay) {
 # 3. Run Tests
 if (-not $SkipTests) {
     Write-Host "`n--- C# Tests ---" -ForegroundColor Yellow
-    dotnet test "$root\tests\OBSReplay.Host.Tests\OBSReplay.Host.Tests.csproj" -c $Configuration
+    dotnet test "$root\tests\ReplayOverlay.Host.Tests\ReplayOverlay.Host.Tests.csproj" -c $Configuration
     if ($LASTEXITCODE -ne 0) { throw "C# tests failed" }
 
     $buildDir = "$root\build\overlay"
@@ -81,7 +81,7 @@ $dist = "$root\dist\$Configuration"
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
 # Publish C# host (self-contained copy with all DLLs)
-$hostOut = "$root\src\OBSReplay.Host\bin\$Configuration\net8.0-windows"
+$hostOut = "$root\src\ReplayOverlay.Host\bin\$Configuration\net8.0-windows"
 if (Test-Path "$hostOut\ReplayOverlay.exe") {
     Copy-Item "$hostOut\*" "$dist\" -Recurse -Force
     Write-Host "Copied C# host to $dist" -ForegroundColor Green

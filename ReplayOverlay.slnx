@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReplayOverlay.Host/ReplayOverlay.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReplayOverlay.Host.Tests/ReplayOverlay.Host.Tests.csproj" />
+  </Folder>
+</Solution>

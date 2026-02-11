@@ -1,8 +1,0 @@
-<Solution>
-  <Folder Name="/src/">
-    <Project Path="src/OBSReplay.Host/OBSReplay.Host.csproj" />
-  </Folder>
-  <Folder Name="/tests/">
-    <Project Path="tests/OBSReplay.Host.Tests/OBSReplay.Host.Tests.csproj" />
-  </Folder>
-</Solution>
