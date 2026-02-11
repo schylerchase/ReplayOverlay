@@ -894,13 +894,6 @@ public partial class App : System.Windows.Application
 
         try
         {
-            var hasCapture = _obs.HasActiveCapture();
-            if (hasCapture == false)
-            {
-                _ipc.SendNotification("NO CAPTURE DETECTED", Constants.Colors.Warning, 3.0);
-                return;
-            }
-
             if (_obs.SaveBuffer())
             {
                 if (_config.ShowNotifications)

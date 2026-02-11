@@ -255,7 +255,7 @@ select option:checked {
 
     css += R"rcss(
 .notification {
-    position: absolute; bottom: 80dp; left: 50%; margin-left: -150dp;
+    position: fixed; bottom: 80dp; left: 50%; margin-left: -150dp;
     width: 300dp; padding: 12dp 20dp; border-radius: 8dp;
     text-align: center; font-size: 16dp; font-weight: bold; z-index: 100;
 }
